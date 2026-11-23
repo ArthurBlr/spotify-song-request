@@ -4,26 +4,60 @@ Une page web où tes collègues cherchent un titre et l'ajoutent à **ta** file 
 
 <img src="docs/screenshot.png" alt="Aperçu : titre en cours, recherche, résultats avec bouton Ajouter" width="300">
 
-## Ce qu'il te faut
+Il te faut un compte Spotify **Premium** : Spotify l'exige pour créer une app et pour ajouter des titres à la file d'attente.
 
-- Un compte Spotify **Premium**. Spotify l'exige pour créer une app et pour ajouter des titres à la file d'attente.
-- Un compte GitHub et un compte [Vercel](https://vercel.com) (l'offre gratuite suffit).
-
-## Installation
-
-Compte dix minutes. Aucune ligne de code à écrire.
-
-### 1. Créer ton app Spotify
+## 1. Créer ton app Spotify
 
 1. Ouvre le [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) et clique sur **Create app**.
 2. Nom et description : ce que tu veux, ils apparaîtront sur l'écran d'autorisation.
-3. **Redirect URI** : mets `http://127.0.0.1:3000/api/callback`. Le champ est obligatoire, tu ajouteras la vraie adresse à l'étape 3.
+3. **Redirect URI** : mets exactement `http://127.0.0.1:3000/api/callback`.
 4. Si le formulaire demande quelle API tu comptes utiliser, coche **Web API**. Accepte les conditions et enregistre.
 5. Dans **Settings**, relève le **Client ID** et le **Client secret**.
 
-### 2. Déployer sur Vercel
+## 2. Lancer la page
 
-[![Déployer sur Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FArthurBlr%2Fspotify-song-request&env=SPOTIFY_CLIENT_ID,SPOTIFY_CLIENT_SECRET,ACCESS_CODE&envDescription=Identifiants%20de%20ton%20app%20Spotify%20et%20code%20d%27acc%C3%A8s%20%C3%A0%20donner%20%C3%A0%20tes%20coll%C3%A8gues&envLink=https%3A%2F%2Fgithub.com%2FArthurBlr%2Fspotify-song-request%23installation&project-name=song-request&repository-name=song-request)
+Deux façons de faire, à toi de choisir :
+
+| | A. Sur ton ordinateur | B. Sur Vercel |
+| --- | --- | --- |
+| Mise en route | Une commande | Dix minutes de réglages |
+| Qui peut ouvrir la page | Les appareils sur le même réseau que toi | Tout le monde, d'où qu'il soit |
+| Disponible | Tant que le script tourne | En permanence |
+| Il te faut | [Node.js](https://nodejs.org) 20.12 ou plus récent | Un compte GitHub et un compte [Vercel](https://vercel.com) gratuit |
+
+### A. Sur ton ordinateur
+
+1. Récupère ce repo : bouton **Code → Download ZIP**, ou `git clone`.
+2. Dans le dossier, lance :
+
+   ```sh
+   npm start
+   ```
+
+3. Réponds aux trois questions : Client ID, Client secret, et le code d'accès que tu donneras à tes collègues.
+4. Ton navigateur s'ouvre sur Spotify : accepte l'autorisation.
+
+Le terminal affiche alors le lien à partager :
+
+```
+Song request est prêt.
+  Sur cet ordinateur : http://127.0.0.1:3000/?code=4821
+  Pour tes collègues : http://192.168.1.23:3000/?code=4821   (même réseau que toi)
+```
+
+Les fois suivantes, `npm start` suffit : tes réponses sont enregistrées dans le fichier `.env`.
+
+À savoir :
+
+- Laisse la fenêtre du terminal ouverte. `Ctrl+C` arrête la page.
+- Au premier lancement, macOS ou Windows peut demander d'autoriser les connexions entrantes. Accepte, sinon tes collègues ne pourront pas ouvrir la page.
+- Si ton ordinateur change de réseau, l'adresse à partager change. Elle est réaffichée à chaque lancement.
+
+### B. Sur Vercel
+
+**B1. Déployer**
+
+[![Déployer sur Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FArthurBlr%2Fspotify-song-request&env=SPOTIFY_CLIENT_ID,SPOTIFY_CLIENT_SECRET,ACCESS_CODE&envDescription=Identifiants%20de%20ton%20app%20Spotify%20et%20code%20d%27acc%C3%A8s%20%C3%A0%20donner%20%C3%A0%20tes%20coll%C3%A8gues&envLink=https%3A%2F%2Fgithub.com%2FArthurBlr%2Fspotify-song-request%23b-sur-vercel&project-name=song-request&repository-name=song-request)
 
 Le bouton copie ce repo sur ton GitHub, puis te demande trois valeurs :
 
@@ -37,7 +71,7 @@ Une fois le déploiement terminé, relève l'adresse de ton site, par exemple `h
 
 > Tu préfères sans le bouton ? Clique sur **Use this template** en haut de ce repo, puis importe ta copie dans Vercel avec **Add New → Project** et renseigne les mêmes variables.
 
-### 3. Déclarer ton adresse chez Spotify
+**B2. Déclarer ton adresse chez Spotify**
 
 Dans ton app Spotify, **Settings → Redirect URIs**, ajoute :
 
@@ -47,19 +81,19 @@ https://TON-SITE.vercel.app/api/callback
 
 L'adresse doit être exactement celle-ci, sans `/` à la fin. En cas de doute, ouvre ton site : la page d'accueil affiche l'adresse à copier.
 
-### 4. Relier ton compte Spotify
+**B3. Relier ton compte Spotify**
 
 1. Ouvre `https://TON-SITE.vercel.app/api/login` et accepte l'autorisation.
 2. La page affiche un *refresh token*. Copie-le.
 3. Dans Vercel, **Settings → Environment Variables**, ajoute `SPOTIFY_REFRESH_TOKEN` avec cette valeur.
 4. Dans **Deployments**, ouvre le menu du dernier déploiement et choisis **Redeploy**. Sans ça, la nouvelle variable n'est pas prise en compte.
 
-C'est prêt.
+Le lien à partager est `https://TON-SITE.vercel.app/?code=TON_CODE`.
 
 ## Utilisation
 
 - Lance de la musique sur Spotify, sur n'importe quel appareil. Spotify n'accepte les ajouts que pendant une lecture.
-- Partage `https://TON-SITE.vercel.app/?code=TON_CODE`. Le code est retenu par le navigateur après la première visite. Tu peux aussi donner l'adresse et le code séparément.
+- Partage le lien avec le code. Le navigateur de chacun le retient après la première visite. Tu peux aussi donner l'adresse et le code séparément.
 - Dans la recherche, on peut taper un titre, un artiste, ou coller un lien Spotify.
 
 Deux règles évitent les abus :
@@ -69,59 +103,52 @@ Deux règles évitent les abus :
 
 ## À refaire tous les six mois
 
-Spotify désactive le refresh token six mois après l'autorisation. La page affiche alors « La connexion au compte Spotify a expiré ».
+Spotify désactive l'autorisation six mois après que tu l'as donnée. La page affiche alors « La connexion au compte Spotify a expiré ».
 
-Refais simplement l'étape 4, en remplaçant la valeur de `SPOTIFY_REFRESH_TOKEN`. La page de l'étape 4 t'indique la date d'expiration : mets-toi un rappel.
+- **Sur ton ordinateur** : ouvre `http://127.0.0.1:3000/api/login` et accepte de nouveau. C'est tout.
+- **Sur Vercel** : refais l'étape B3 en remplaçant la valeur de `SPOTIFY_REFRESH_TOKEN`.
+
+La page affichée après l'autorisation t'indique la date d'expiration : mets-toi un rappel.
 
 ## Réglages
+
+Sur ton ordinateur, ils se trouvent dans le fichier `.env` ; relance `npm start` après un changement. Sur Vercel, dans **Settings → Environment Variables** ; redéploie après un changement.
 
 | Variable | Rôle | Par défaut |
 | --- | --- | --- |
 | `SPOTIFY_CLIENT_ID` | Identifiant de ton app Spotify | obligatoire |
 | `SPOTIFY_CLIENT_SECRET` | Secret de ton app Spotify | obligatoire |
-| `SPOTIFY_REFRESH_TOKEN` | Autorisation de ton compte, obtenue à l'étape 4 | obligatoire |
+| `SPOTIFY_REFRESH_TOKEN` | Autorisation de ton compte, obtenue à la connexion | obligatoire |
 | `ACCESS_CODE` | Code demandé aux visiteurs. Vide : la page est ouverte à tous | vide |
 | `COOLDOWN_SECONDS` | Délai entre deux demandes d'un même navigateur. `0` : aucun délai | `30` |
-
-Après chaque changement de variable dans Vercel, il faut redéployer.
+| `PORT` | Sur ton ordinateur seulement : port de la page. Si tu le changes, change aussi la Redirect URI de l'étape 1 | `3000` |
+| `HOST` | Sur ton ordinateur seulement : `127.0.0.1` rend la page invisible pour les autres appareils | `0.0.0.0` |
 
 ## Dépannage
 
 | Symptôme | Cause et solution |
 | --- | --- |
-| Spotify affiche « INVALID_CLIENT: Invalid redirect URI » | L'adresse de l'étape 3 ne correspond pas exactement à celle du site. Vérifie `https`, le domaine et l'absence de `/` final. |
+| Spotify affiche « INVALID_CLIENT: Invalid redirect URI » | La Redirect URI déclarée dans ton app Spotify ne correspond pas exactement à l'adresse utilisée. Vérifie `http` ou `https`, le domaine, le port et l'absence de `/` final. |
 | « Rien n'est en lecture sur Spotify » | Lance un titre. La file n'existe que pendant une lecture. |
 | « Spotify refuse la demande » | Dans ton app Spotify, **Settings → User Management**, ajoute ton propre compte (nom et e-mail Spotify). |
 | « Le compte Spotify relié doit être Premium » | L'abonnement Premium est obligatoire. |
-| « La connexion au compte Spotify a expiré » | Refais l'étape 4. |
-| La page affiche toujours « Installation à terminer » | Une variable manque, ou tu n'as pas redéployé après l'avoir ajoutée. |
-
-Les erreurs détaillées sont visibles dans Vercel, onglet **Logs**.
-
-## Lancer en local
-
-Il faut Node.js 20.12 ou plus récent. Aucune dépendance à installer.
-
-```sh
-cp .env.example .env   # renseigne le Client ID et le Client secret
-npm start              # http://127.0.0.1:3000
-```
-
-Ouvre ensuite `http://127.0.0.1:3000/api/login`, colle le token obtenu dans `.env`, puis relance `npm start`.
-
-- Utilise bien `127.0.0.1` : Spotify refuse `localhost` comme Redirect URI.
-- `HOST=0.0.0.0 npm start` rend la page accessible aux appareils du même réseau.
-- `npm test` lance les tests. Ils simulent Spotify et ne demandent ni compte ni réseau.
+| « La connexion au compte Spotify a expiré » | Voir « À refaire tous les six mois ». |
+| Tes collègues n'arrivent pas à ouvrir le lien (script sur ton ordinateur) | Ils doivent être sur le même réseau que toi, et ton pare-feu doit autoriser Node.js. Certains Wi-Fi invités empêchent les appareils de se voir : dans ce cas, passe par Vercel. |
+| « Le port 3000 est déjà pris » | Un autre programme l'utilise. Ferme-le, ou change `PORT`. |
+| Sur Vercel, la page affiche toujours « Installation à terminer » | Une variable manque, ou tu n'as pas redéployé après l'avoir ajoutée. Les erreurs détaillées sont dans l'onglet **Logs**. |
 
 ## Comment c'est fait
 
-| Dossier | Contenu |
+| Élément | Contenu |
 | --- | --- |
 | `public/` | La page : HTML, CSS et JavaScript sans framework |
 | `api/` | Une fonction par route : `login`, `callback`, `search`, `queue`, `request` |
 | `lib/` | Appels à Spotify, contrôle du code d'accès et des limites |
-| `local-server.js` | Serveur pour le lancement en local |
+| `local-server.js` | Le script lancé par `npm start` |
+| `test/` | Tests, lancés par `npm test`. Ils simulent Spotify et ne demandent ni compte ni réseau |
 
+- Aucune dépendance à installer.
 - Le Client secret et le refresh token restent côté serveur. Le navigateur des visiteurs ne les voit jamais.
 - L'autorisation demandée à Spotify se limite à lire la lecture en cours et à ajouter des titres à la file.
+- Sur ton ordinateur, seul cet ordinateur peut relier ou changer le compte Spotify : `/api/login` est refusé aux autres appareils.
 - Les limites sont volontairement simples : le délai tient dans un cookie signé, et un plafond de 30 demandes par 10 minutes s'applique par adresse IP. Elles découragent les abus entre collègues, pas une attaque déterminée. Garde un `ACCESS_CODE`.
