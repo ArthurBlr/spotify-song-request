@@ -23,6 +23,7 @@ const storage = {
 
 let accessCode = storage.get('sr_code');
 let currentView = null;
+let playingUri = null;
 let cooldownUntil = 0;
 let cooldownTimer = 0;
 let searchTimer = 0;
@@ -76,6 +77,15 @@ function el(tag, className, text) {
 function show(name) {
   currentView = name;
   for (const [key, node] of Object.entries(views)) node.hidden = key !== name;
+  if (name !== 'main') renderPresent(0);
+}
+
+/** Narrow screens only: which of the two panes is on screen. */
+function selectTab(name) {
+  $('panes').dataset.tab = name;
+  for (const tab of document.querySelectorAll('.tabs button')) {
+    tab.setAttribute('aria-pressed', String(tab.dataset.tab === name));
+  }
 }
 
 /** Switches to the setup or code screen when the error calls for it. */
@@ -161,8 +171,30 @@ function renderNow(track, errorMessage) {
 }
 
 function renderNext(tracks) {
-  $('next-section').hidden = tracks.length === 0;
   $('next').replaceChildren(...tracks.map((track) => trackRow(track)));
+  $('next-empty').hidden = tracks.length > 0;
+}
+
+function renderPresent(count) {
+  const node = $('present');
+  node.hidden = !(count > 0);
+  node.textContent = count > 1 ? `${count} personnes en ligne` : '1 personne en ligne';
+}
+
+/** `skip` is the vote on the track that is playing: { votes, needed, voted }, or null. */
+function renderSkip(skip) {
+  const button = $('skip');
+  button.hidden = !skip;
+  if (!skip) return;
+  const count = `${skip.votes} ${skip.votes > 1 ? 'votes' : 'vote'} sur ${skip.needed}`;
+  button.disabled = skip.voted;
+  button.classList.toggle('voted', skip.voted);
+  button.textContent = `${skip.voted ? 'Voté' : 'Passer'} · ${skip.votes}/${skip.needed}`;
+  button.title = 'Le titre est passé dès que plus de la moitié des personnes en ligne ont voté.';
+  button.setAttribute(
+    'aria-label',
+    skip.voted ? `Tu as voté pour passer ce titre : ${count}` : `Voter pour passer ce titre : ${count}`,
+  );
 }
 
 function renderResults(tracks) {
@@ -227,8 +259,11 @@ async function refreshQueue() {
   try {
     const data = await api('/api/queue');
     show('main');
+    playingUri = data.playing?.uri ?? null;
     renderNow(data.playing);
     renderNext(data.next);
+    renderPresent(data.present);
+    renderSkip(data.skip);
     if (data.cooldown > cooldownLeft()) startCooldown(data.cooldown);
   } catch (err) {
     if (handleGate(err)) return;
@@ -238,8 +273,37 @@ async function refreshQueue() {
       return;
     }
     show('main');
+    playingUri = null;
     renderNow(null, err.message);
     renderNext([]);
+    renderPresent(0);
+    renderSkip(null);
+  }
+}
+
+async function voteSkip() {
+  const button = $('skip');
+  button.disabled = true;
+  try {
+    const data = await api('/api/queue', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ skip: playingUri }),
+    });
+    renderPresent(data.present);
+    renderSkip(data.skip);
+    if (data.skipped) {
+      toast('Titre passé.');
+      // Spotify takes a moment to move on to the next track.
+      setTimeout(refreshQueue, 2000);
+    } else {
+      toast(`Vote enregistré : ${data.skip.votes} sur ${data.skip.needed}.`);
+    }
+  } catch (err) {
+    button.disabled = false;
+    if (handleGate(err)) return;
+    toast(err.message, 'error');
+    if (err.code === 'track_changed') refreshQueue();
   }
 }
 
@@ -309,6 +373,12 @@ $('search-form').addEventListener('submit', (event) => {
   clearTimeout(searchTimer);
   runSearch();
 });
+
+$('skip').addEventListener('click', voteSkip);
+
+for (const tab of document.querySelectorAll('.tabs button')) {
+  tab.addEventListener('click', () => selectTab(tab.dataset.tab));
+}
 
 $('code-form').addEventListener('submit', (event) => {
   event.preventDefault();

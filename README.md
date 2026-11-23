@@ -2,7 +2,7 @@
 
 Une page web où tes collègues cherchent un titre et l'ajoutent à **ta** file d'attente Spotify. Eux n'ont besoin d'aucun compte.
 
-<img src="docs/screenshot.png" alt="Aperçu : titre en cours, recherche, résultats avec bouton Ajouter" width="300">
+<img src="docs/screenshot.png" alt="Aperçu : titre en cours avec le vote pour le passer, recherche à gauche, file d'attente à droite" width="720">
 
 Il te faut un compte Spotify **Premium** : Spotify l'exige pour créer une app et pour ajouter des titres à la file d'attente.
 
@@ -23,6 +23,7 @@ Deux façons de faire, à toi de choisir :
 | Mise en route | Une commande | Dix minutes de réglages |
 | Qui peut ouvrir la page | Les appareils sur le même réseau que toi | Tout le monde, d'où qu'il soit |
 | Disponible | Tant que le script tourne | En permanence |
+| Votes et nombre de personnes en ligne | Exacts | Approximatifs |
 | Il te faut | [Node.js](https://nodejs.org) 20.12 ou plus récent | Un compte GitHub et un compte [Vercel](https://vercel.com) gratuit |
 
 ### A. Sur ton ordinateur
@@ -95,11 +96,14 @@ Le lien à partager est `https://TON-SITE.vercel.app/?code=TON_CODE`.
 - Lance de la musique sur Spotify, sur n'importe quel appareil. Spotify n'accepte les ajouts que pendant une lecture.
 - Partage le lien avec le code. Le navigateur de chacun le retient après la première visite. Tu peux aussi donner l'adresse et le code séparément.
 - Dans la recherche, on peut taper un titre, un artiste, ou coller un lien Spotify.
+- La file d'attente a son propre volet : à côté de la recherche sur un écran large, dans un onglet sur téléphone.
+- Le bouton **Passer** sert à voter pour passer le titre en cours. Il est passé dès que plus de la moitié des personnes en ligne ont voté : 2 votes pour 3 personnes, 3 pour 4. Quand on est seul sur la page, un vote suffit.
+- Le nombre de personnes en ligne s'affiche en haut de la page. Il compte les navigateurs où la page est ouverte et visible.
 
 Deux règles évitent les abus :
 
 - Un titre en cours de lecture ou déjà dans la file est refusé.
-- Chaque navigateur attend 30 secondes entre deux demandes.
+- Chaque navigateur attend 3 secondes entre deux demandes.
 
 ## À refaire tous les six mois
 
@@ -120,7 +124,7 @@ Sur ton ordinateur, ils se trouvent dans le fichier `.env` ; relance `npm start`
 | `SPOTIFY_CLIENT_SECRET` | Secret de ton app Spotify | obligatoire |
 | `SPOTIFY_REFRESH_TOKEN` | Autorisation de ton compte, obtenue à la connexion | obligatoire |
 | `ACCESS_CODE` | Code demandé aux visiteurs. Vide : la page est ouverte à tous | vide |
-| `COOLDOWN_SECONDS` | Délai entre deux demandes d'un même navigateur. `0` : aucun délai | `30` |
+| `COOLDOWN_SECONDS` | Délai entre deux demandes d'un même navigateur. `0` : aucun délai | `3` |
 | `PORT` | Sur ton ordinateur seulement : port de la page. Si tu le changes, change aussi la Redirect URI de l'étape 1 | `3000` |
 | `HOST` | Sur ton ordinateur seulement : `127.0.0.1` rend la page invisible pour les autres appareils | `0.0.0.0` |
 
@@ -149,6 +153,7 @@ Sur ton ordinateur, ils se trouvent dans le fichier `.env` ; relance `npm start`
 
 - Aucune dépendance à installer.
 - Le Client secret et le refresh token restent côté serveur. Le navigateur des visiteurs ne les voit jamais.
-- L'autorisation demandée à Spotify se limite à lire la lecture en cours et à ajouter des titres à la file.
+- L'autorisation demandée à Spotify se limite à lire la lecture en cours, ajouter des titres à la file et passer au titre suivant.
 - Sur ton ordinateur, seul cet ordinateur peut relier ou changer le compte Spotify : `/api/login` est refusé aux autres appareils.
-- Les limites sont volontairement simples : le délai tient dans un cookie signé, et un plafond de 30 demandes par 10 minutes s'applique par adresse IP. Elles découragent les abus entre collègues, pas une attaque déterminée. Garde un `ACCESS_CODE`.
+- Les limites sont volontairement simples : le délai tient dans un cookie signé, et un plafond de 30 demandes par 10 minutes s'applique par adresse IP. Un autre cookie signé distingue les navigateurs, pour compter les personnes en ligne et donner un vote à chacune. Ces limites découragent les abus entre collègues, pas une attaque déterminée. Garde un `ACCESS_CODE`.
+- Les votes et le nombre de personnes en ligne sont gardés dans la mémoire du serveur : ils repartent de zéro quand tu relances le script. Sur Vercel, les visiteurs peuvent être répartis sur plusieurs instances qui ne partagent pas leur mémoire : le compteur peut alors être sous-estimé, et un titre passé avec moins de votes.

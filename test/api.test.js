@@ -6,10 +6,11 @@ import { beforeEach, test } from 'node:test';
 
 import { GET as callback } from '../api/callback.js';
 import { GET as login } from '../api/login.js';
-import { GET as queue } from '../api/queue.js';
+import { GET as queue, POST as vote } from '../api/queue.js';
 import { POST as request } from '../api/request.js';
 import { GET as search } from '../api/search.js';
 import { rateLimit } from '../lib/guard.js';
+import { resetRoom } from '../lib/room.js';
 
 const ORIGIN = 'https://songs.example';
 const CODE = 'sésame 42';
@@ -49,6 +50,7 @@ function fakeSpotify() {
     search: () => reply(200, { tracks: { items: [track(3, 'Trouvé'), track(4, 'Autre')] } }),
     track: () => reply(200, track(5, 'Par lien')),
     add: () => reply(204),
+    next: () => reply(204),
   };
   globalThis.fetch = async (input, init = {}) => {
     const url = new URL(String(input));
@@ -59,6 +61,7 @@ function fakeSpotify() {
     if (route === 'POST accounts.spotify.com/api/token') return state.token(call);
     if (route === 'GET api.spotify.com/v1/me/player/queue') return state.queue(call);
     if (route === 'POST api.spotify.com/v1/me/player/queue') return state.add(call);
+    if (route === 'POST api.spotify.com/v1/me/player/next') return state.next(call);
     if (route === 'GET api.spotify.com/v1/search') return state.search(call);
     if (route.startsWith('GET api.spotify.com/v1/tracks/')) return state.track(call);
     throw new Error(`Unexpected call to Spotify: ${route}`);
@@ -84,6 +87,22 @@ function call(path, { method = 'GET', code = CODE, headers = {}, body } = {}) {
   });
 }
 
+/** One visitor's browser: it keeps the cookies the server hands out and sends them back. */
+function browser() {
+  const jar = new Map();
+  return async (handler, path, options = {}) => {
+    const cookie = [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
+    const res = await handler(call(path, { ...options, headers: { ...options.headers, ...(cookie && { cookie }) } }));
+    for (const line of res.headers.getSetCookie()) {
+      const pair = line.split(';')[0];
+      jar.set(pair.slice(0, pair.indexOf('=')), pair.slice(pair.indexOf('=') + 1));
+    }
+    return res;
+  };
+}
+
+const skip = (uri) => ({ method: 'POST', body: { skip: uri } });
+
 beforeEach(() => {
   run += 1;
   process.env.SPOTIFY_CLIENT_ID = 'client-id';
@@ -91,7 +110,8 @@ beforeEach(() => {
   // A new token per test starts each one with empty token and queue caches.
   process.env.SPOTIFY_REFRESH_TOKEN = `refresh-${run}`;
   process.env.ACCESS_CODE = CODE;
-  process.env.COOLDOWN_SECONDS = '30';
+  delete process.env.COOLDOWN_SECONDS;
+  resetRoom();
   spotify = fakeSpotify();
 });
 
@@ -186,20 +206,20 @@ test('queue shows what is playing and what comes next, with one token for all ca
 test('queue copes with nothing playing', async () => {
   spotify.queue = () => reply(200, { currently_playing: null, queue: [] });
   const body = await (await queue(call('/api/queue'))).json();
-  assert.deepEqual(body, { playing: null, next: [], cooldown: 0 });
+  assert.deepEqual(body, { playing: null, next: [], cooldown: 0, present: 1, skip: null });
 });
 
 test('a request adds the track, then the same browser has to wait', async () => {
   const uri = track(7).uri;
   const res = await request(call('/api/request', { method: 'POST', body: { uri } }));
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { ok: true, cooldown: 30 });
+  assert.deepEqual(await res.json(), { ok: true, cooldown: 3 });
 
   const added = spotify.calls.find((c) => c.method === 'POST' && c.url.pathname === '/v1/me/player/queue');
   assert.equal(added.url.searchParams.get('uri'), uri);
 
   const cookie = res.headers.get('set-cookie');
-  assert.match(cookie, /^sr_last=\d+\.[\w-]+; Path=\/; Max-Age=30; HttpOnly; SameSite=Lax; Secure$/);
+  assert.match(cookie, /^sr_last=\d+\.[\w-]+; Path=\/; Max-Age=3; HttpOnly; SameSite=Lax; Secure$/);
   const pair = cookie.split(';')[0];
 
   const again = await request(
@@ -208,7 +228,7 @@ test('a request adds the track, then the same browser has to wait', async () => 
   assert.equal(again.status, 429);
   const refused = await again.json();
   assert.equal(refused.error, 'cooldown');
-  assert.ok(refused.retryAfter > 0 && refused.retryAfter <= 30);
+  assert.ok(refused.retryAfter > 0 && refused.retryAfter <= 3);
   assert.equal(spotify.count('POST', '/v1/me/player/queue'), 1);
 
   // The page restores the countdown after a reload.
@@ -224,6 +244,117 @@ test('a request adds the track, then the same browser has to wait', async () => 
     }),
   );
   assert.equal(forged.status, 200);
+});
+
+test('queue counts the browsers that have the page open', async () => {
+  const alice = browser();
+  const bob = browser();
+
+  const first = await alice(queue, '/api/queue');
+  assert.match(
+    first.headers.get('set-cookie'),
+    /^sr_id=[\w-]+\.[\w-]+; Path=\/; Max-Age=15552000; HttpOnly; SameSite=Lax; Secure$/,
+  );
+  assert.equal((await first.json()).present, 1);
+
+  // The same browser again is still one person, and keeps its id.
+  const again = await alice(queue, '/api/queue');
+  assert.equal(again.headers.get('set-cookie'), null);
+  assert.equal((await again.json()).present, 1);
+
+  assert.equal((await (await bob(queue, '/api/queue')).json()).present, 2);
+
+  // An id this server did not sign is replaced by a real one.
+  const forged = await queue(call('/api/queue', { headers: { cookie: 'sr_id=alice.forged' } }));
+  assert.match(forged.headers.get('set-cookie'), /^sr_id=/);
+  assert.equal((await forged.json()).present, 3);
+});
+
+test('a new visitor gets their id even when Spotify fails', async () => {
+  spotify.queue = () => reply(500, { error: { status: 500, message: 'Server error' } });
+  const res = await queue(call('/api/queue'));
+  assert.equal(res.status, 502);
+  assert.match(res.headers.get('set-cookie'), /^sr_id=/);
+});
+
+test('the track is skipped once more than half of the people present have voted', async () => {
+  const [alice, bob, chloe] = [browser(), browser(), browser()];
+  for (const open of [alice, bob, chloe]) await open(queue, '/api/queue');
+  const uri = track(1).uri;
+
+  const first = await alice(vote, '/api/queue', skip(uri));
+  assert.equal(first.status, 200);
+  assert.deepEqual(await first.json(), {
+    skipped: false,
+    present: 3,
+    skip: { votes: 1, needed: 2, voted: true },
+  });
+
+  // Voting twice does not count twice.
+  const twice = await alice(vote, '/api/queue', skip(uri));
+  assert.equal((await twice.json()).skip.votes, 1);
+  assert.equal(spotify.count('POST', '/v1/me/player/next'), 0);
+
+  // The others see where the vote stands.
+  const seen = await (await bob(queue, '/api/queue')).json();
+  assert.deepEqual(seen.skip, { votes: 1, needed: 2, voted: false });
+
+  const second = await bob(vote, '/api/queue', skip(uri));
+  assert.deepEqual(await second.json(), { skipped: true, present: 3, skip: null });
+  assert.equal(spotify.count('POST', '/v1/me/player/next'), 1);
+
+  // Spotify still reports the old track for a moment: no second skip, no new vote.
+  const late = await chloe(vote, '/api/queue', skip(uri));
+  assert.equal((await late.json()).skipped, true);
+  assert.equal((await (await chloe(queue, '/api/queue')).json()).skip, null);
+  assert.equal(spotify.count('POST', '/v1/me/player/next'), 1);
+});
+
+test('a vote only counts for the track that is playing', async () => {
+  const alice = browser();
+  const res = await alice(vote, '/api/queue', skip(track(2).uri));
+  assert.equal(res.status, 409);
+  assert.equal((await res.json()).error, 'track_changed');
+
+  // The page was a few seconds late: the voted track ended in the meantime.
+  await alice(queue, '/api/queue');
+  spotify.queue = () => reply(200, { currently_playing: track(2, 'Suivant'), queue: [] });
+  const ended = await alice(vote, '/api/queue', skip(track(1).uri));
+  assert.equal(ended.status, 200);
+  assert.equal(spotify.count('POST', '/v1/me/player/next'), 0);
+});
+
+test('a skip refused by Spotify can be voted again', async () => {
+  const alice = browser();
+  spotify.next = () =>
+    reply(403, { error: { status: 403, message: 'Player command failed: Restriction violated', reason: 'UNKNOWN' } });
+  const refused = await alice(vote, '/api/queue', skip(track(1).uri));
+  assert.equal(refused.status, 403);
+  assert.equal((await refused.json()).error, 'forbidden');
+
+  spotify.next = () => reply(204);
+  const retried = await alice(vote, '/api/queue', skip(track(1).uri));
+  assert.equal((await retried.json()).skipped, true);
+  assert.equal(spotify.count('POST', '/v1/me/player/next'), 2);
+});
+
+test('one address cannot collect visitor ids, and so votes, without end', async () => {
+  for (let i = 0; i < 30; i += 1) await queue(call('/api/queue'));
+  const res = await queue(call('/api/queue'));
+  assert.equal(res.headers.get('set-cookie'), null);
+  assert.equal((await res.json()).present, 30);
+
+  const refused = await vote(call('/api/queue', skip(track(1).uri)));
+  assert.equal(refused.status, 429);
+  assert.equal(spotify.count('POST', '/v1/me/player/next'), 0);
+});
+
+test('a vote needs the access code and a JSON body naming the track', async () => {
+  const uri = track(1).uri;
+  assert.equal((await vote(call('/api/queue', { ...skip(uri), code: null }))).status, 401);
+  assert.equal((await vote(call('/api/queue', { ...skip(uri), headers: { 'content-type': 'text/plain' } }))).status, 415);
+  assert.equal((await vote(call('/api/queue', { method: 'POST', body: {} }))).status, 400);
+  assert.equal(spotify.calls.length, 0);
 });
 
 test('COOLDOWN_SECONDS=0 removes the wait', async () => {

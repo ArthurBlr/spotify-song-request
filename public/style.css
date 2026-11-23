@@ -68,12 +68,39 @@ body {
 }
 
 .top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
   margin-bottom: 24px;
 }
 
 .lead {
   margin: 4px 0 0;
   color: var(--muted);
+}
+
+/* How many people have the page open. */
+.present {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 5px 12px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.present::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
 }
 
 .card {
@@ -166,6 +193,35 @@ a:focus-visible {
 }
 
 .add.done:disabled {
+  color: var(--ok);
+}
+
+/* Secondary action: the vote to skip. */
+.ghost {
+  flex: none;
+  margin-left: auto;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.ghost:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+
+.ghost:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.ghost.voted:disabled {
   color: var(--ok);
 }
 
@@ -263,14 +319,94 @@ a:focus-visible {
   color: var(--muted);
 }
 
-#next-section {
-  margin-top: 28px;
+/* The skip button sits next to the track, or under it when space is short. */
+.now-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+
+#now {
+  flex: 1 1 220px;
+  min-width: 0;
 }
 
 .compact .cover {
   width: 40px;
   height: 40px;
   border-radius: 6px;
+}
+
+/* Two panes: picking a track, and what is queued. One at a time behind the
+   tabs on a narrow screen, side by side when there is room. */
+
+.tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 4px;
+  background: var(--raised);
+  border-radius: 999px;
+}
+
+.tabs button {
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.tabs button[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+}
+
+.pane input[type="search"] {
+  background: var(--bg);
+}
+
+.pane .compact {
+  margin-top: 0;
+}
+
+.empty {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+@media (max-width: 859.98px) {
+  .panes[data-tab="search"] #pane-queue,
+  .panes[data-tab="queue"] #pane-search,
+  .pane > .eyebrow {
+    display: none;
+  }
+}
+
+@media (min-width: 860px) {
+  .app:has(#view-main:not([hidden])) {
+    max-width: 1000px;
+  }
+
+  .tabs {
+    display: none;
+  }
+
+  .panes {
+    display: grid;
+    /* minmax(0, …): a long title is cut short instead of widening its column. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
 }
 
 /* Setup and login screens */

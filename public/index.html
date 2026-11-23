@@ -11,8 +11,11 @@
 <body>
 <main class="app">
   <header class="top">
-    <h1>Demande un titre</h1>
-    <p class="lead">Cherche un morceau : il part dans la file d’attente.</p>
+    <div>
+      <h1>Demande un titre</h1>
+      <p class="lead">Cherche un morceau : il part dans la file d’attente.</p>
+    </div>
+    <p id="present" class="present" hidden></p>
   </header>
 
   <!-- Shown while the owner has not finished the installation. -->
@@ -36,23 +39,38 @@
   <div id="view-main" hidden>
     <section class="card now" aria-labelledby="now-title">
       <h2 id="now-title" class="eyebrow">En cours de lecture</h2>
-      <div id="now"></div>
+      <div class="now-row">
+        <div id="now"></div>
+        <button id="skip" class="ghost" type="button" hidden></button>
+      </div>
     </section>
 
-    <form id="search-form" role="search">
-      <label class="sr-only" for="q">Rechercher un titre</label>
-      <input id="q" type="search" placeholder="Titre, artiste ou lien Spotify" autocomplete="off" enterkeyhint="search">
-    </form>
-    <div class="hints">
-      <p id="status" class="hint" role="status"></p>
-      <p id="cooldown" class="hint" hidden></p>
+    <!-- Narrow screens show one pane at a time; wide screens show both and hide these. -->
+    <div class="tabs" role="group" aria-label="Affichage">
+      <button type="button" data-tab="search" aria-pressed="true">Ajouter un titre</button>
+      <button type="button" data-tab="queue" aria-pressed="false">File d’attente</button>
     </div>
-    <ul id="results" class="tracks" aria-label="Résultats"></ul>
 
-    <section id="next-section" hidden aria-labelledby="next-title">
-      <h2 id="next-title" class="eyebrow">À suivre</h2>
-      <ul id="next" class="tracks compact"></ul>
-    </section>
+    <div id="panes" class="panes" data-tab="search">
+      <section id="pane-search" class="card pane" aria-labelledby="search-title">
+        <h2 id="search-title" class="eyebrow">Ajouter un titre</h2>
+        <form id="search-form" role="search">
+          <label class="sr-only" for="q">Rechercher un titre</label>
+          <input id="q" type="search" placeholder="Titre, artiste ou lien Spotify" autocomplete="off" enterkeyhint="search">
+        </form>
+        <div class="hints">
+          <p id="status" class="hint" role="status"></p>
+          <p id="cooldown" class="hint" hidden></p>
+        </div>
+        <ul id="results" class="tracks" aria-label="Résultats"></ul>
+      </section>
+
+      <section id="pane-queue" class="card pane" aria-labelledby="queue-title">
+        <h2 id="queue-title" class="eyebrow">File d’attente</h2>
+        <ul id="next" class="tracks compact"></ul>
+        <p id="next-empty" class="empty">Aucun titre en attente.</p>
+      </section>
+    </div>
   </div>
 </main>
 
