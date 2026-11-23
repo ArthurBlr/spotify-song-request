@@ -1,0 +1,11 @@
+{
+  "name": "spotify-song-request",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Page web de song request : chacun ajoute un titre à ta file d'attente Spotify, sans compte.",
+  "scripts": {
+    "start": "node local-server.js",
+    "test": "node --test"
+  }
+}
