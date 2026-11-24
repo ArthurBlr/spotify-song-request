@@ -24,6 +24,12 @@ const storage = {
 let accessCode = storage.get('sr_code');
 let currentView = null;
 let playingUri = null;
+let volume = null;
+let volumeBusy = false;
+let volumeUntil = 0;
+let volumeTimer = 0;
+// Counts the changes made from this page, to tell when a poll answers with an older volume.
+let volumeChanges = 0;
 let cooldownUntil = 0;
 let cooldownTimer = 0;
 let searchTimer = 0;
@@ -197,6 +203,36 @@ function renderSkip(skip) {
   );
 }
 
+/**
+ * `state` is { percent, min, max, wait }, or null when the volume cannot be set
+ * from here. `wait` is the seconds before this browser may move it again.
+ */
+function renderVolume(state) {
+  volume = state ?? null;
+  $('volume').hidden = !volume;
+  if (!volume) return;
+  $('volume-level').textContent = `${volume.percent} %`;
+  if (volume.wait > 0) holdVolume(volume.wait);
+  updateVolumeButtons();
+}
+
+function holdVolume(seconds) {
+  volumeUntil = Date.now() + seconds * 1000;
+  clearTimeout(volumeTimer);
+  volumeTimer = setTimeout(updateVolumeButtons, seconds * 1000 + 50);
+}
+
+function updateVolumeButtons() {
+  if (!volume) return;
+  const held = volumeBusy || Date.now() < volumeUntil;
+  const atMin = volume.percent <= volume.min;
+  const atMax = volume.percent >= volume.max;
+  $('volume-down').disabled = held || atMin;
+  $('volume-up').disabled = held || atMax;
+  $('volume-down').title = atMin ? `Pas en dessous de ${volume.min} % depuis cette page.` : '';
+  $('volume-up').title = atMax ? `Pas au-dessus de ${volume.max} % depuis cette page.` : '';
+}
+
 function renderResults(tracks) {
   $('results').replaceChildren(...tracks.map((track) => trackRow(track, { button: true })));
 }
@@ -256,6 +292,7 @@ function updateCooldown() {
 // --- Actions -----------------------------------------------------------------
 
 async function refreshQueue() {
+  const changes = volumeChanges;
   try {
     const data = await api('/api/queue');
     show('main');
@@ -264,6 +301,8 @@ async function refreshQueue() {
     renderNext(data.next);
     renderPresent(data.present);
     renderSkip(data.skip);
+    // An answer that was on its way while the volume was being changed is out of date.
+    if (changes === volumeChanges) renderVolume(data.volume);
     if (data.cooldown > cooldownLeft()) startCooldown(data.cooldown);
   } catch (err) {
     if (handleGate(err)) return;
@@ -278,6 +317,7 @@ async function refreshQueue() {
     renderNext([]);
     renderPresent(0);
     renderSkip(null);
+    renderVolume(null);
   }
 }
 
@@ -304,6 +344,33 @@ async function voteSkip() {
     if (handleGate(err)) return;
     toast(err.message, 'error');
     if (err.code === 'track_changed') refreshQueue();
+  }
+}
+
+async function changeVolume(direction) {
+  volumeBusy = true;
+  volumeChanges += 1;
+  updateVolumeButtons();
+  try {
+    const data = await api('/api/queue', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ volume: direction }),
+    });
+    renderVolume(data.volume);
+    const next = data.volume.wait > 0 ? ` Prochain réglage dans ${data.volume.wait} s.` : '';
+    toast(`Volume à ${data.volume.percent} %.${next}`);
+  } catch (err) {
+    if (handleGate(err)) return;
+    if (err.code === 'volume_unavailable' || err.code === 'volume_off') renderVolume(null);
+    else if (err.data.volume) renderVolume(err.data.volume);
+    else if (err.code === 'volume_wait') holdVolume(err.data.retryAfter);
+    toast(err.message, 'error');
+  } finally {
+    volumeBusy = false;
+    // Also sets aside a poll that left while the change was under way.
+    volumeChanges += 1;
+    updateVolumeButtons();
   }
 }
 
@@ -375,6 +442,8 @@ $('search-form').addEventListener('submit', (event) => {
 });
 
 $('skip').addEventListener('click', voteSkip);
+$('volume-down').addEventListener('click', () => changeVolume('down'));
+$('volume-up').addEventListener('click', () => changeVolume('up'));
 
 for (const tab of document.querySelectorAll('.tabs button')) {
   tab.addEventListener('click', () => selectTab(tab.dataset.tab));

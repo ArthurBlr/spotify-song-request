@@ -2,7 +2,7 @@
 
 Une page web où tes collègues cherchent un titre et l'ajoutent à **ta** file d'attente Spotify. Eux n'ont besoin d'aucun compte.
 
-<img src="docs/screenshot.png" alt="Aperçu : titre en cours avec le vote pour le passer, recherche à gauche, file d'attente à droite" width="720">
+<img src="docs/screenshot.png" alt="Aperçu : titre en cours avec le réglage du volume et le vote pour le passer, recherche à gauche, file d'attente à droite" width="720">
 
 Il te faut un compte Spotify **Premium** : Spotify l'exige pour créer une app et pour ajouter des titres à la file d'attente.
 
@@ -98,12 +98,14 @@ Le lien à partager est `https://TON-SITE.vercel.app/?code=TON_CODE`.
 - Dans la recherche, on peut taper un titre, un artiste, ou coller un lien Spotify.
 - La file d'attente a son propre volet : à côté de la recherche sur un écran large, dans un onglet sur téléphone.
 - Le bouton **Passer** sert à voter pour passer le titre en cours. Il est passé dès que plus de la moitié des personnes en ligne ont voté : 2 votes pour 3 personnes, 3 pour 4. Quand on est seul sur la page, un vote suffit.
+- Les boutons **−** et **+** règlent le volume de Spotify par pas de 10 %. Depuis la page, il ne monte jamais au-dessus de 50 % et ne descend jamais sous 10 %. Toi, tu restes libre de le régler comme tu veux dans Spotify : si tu dépasses 50 %, la page permet seulement de le baisser.
 - Le nombre de personnes en ligne s'affiche en haut de la page. Il compte les navigateurs où la page est ouverte et visible.
 
-Deux règles évitent les abus :
+Trois règles évitent les abus :
 
 - Un titre en cours de lecture ou déjà dans la file est refusé.
 - Chaque navigateur attend 3 secondes entre deux demandes.
+- Chaque navigateur attend 10 secondes entre deux réglages du volume.
 
 ## À refaire tous les six mois
 
@@ -125,6 +127,8 @@ Sur ton ordinateur, ils se trouvent dans le fichier `.env` ; relance `npm start`
 | `SPOTIFY_REFRESH_TOKEN` | Autorisation de ton compte, obtenue à la connexion | obligatoire |
 | `ACCESS_CODE` | Code demandé aux visiteurs. Vide : la page est ouverte à tous | vide |
 | `COOLDOWN_SECONDS` | Délai entre deux demandes d'un même navigateur. `0` : aucun délai | `3` |
+| `VOLUME_MAX` | Volume le plus fort que les visiteurs peuvent régler, en %. `0` : pas de réglage du volume depuis la page | `50` |
+| `VOLUME_MIN` | Volume le plus faible que les visiteurs peuvent régler, en % | `10` |
 | `PORT` | Sur ton ordinateur seulement : port de la page. Si tu le changes, change aussi la Redirect URI de l'étape 1 | `3000` |
 | `HOST` | Sur ton ordinateur seulement : `127.0.0.1` rend la page invisible pour les autres appareils | `0.0.0.0` |
 
@@ -136,6 +140,8 @@ Sur ton ordinateur, ils se trouvent dans le fichier `.env` ; relance `npm start`
 | « Rien n'est en lecture sur Spotify » | Lance un titre. La file n'existe que pendant une lecture. |
 | « Spotify refuse la demande » | Dans ton app Spotify, **Settings → User Management**, ajoute ton propre compte (nom et e-mail Spotify). |
 | « Le compte Spotify relié doit être Premium » | L'abonnement Premium est obligatoire. |
+| Les boutons de volume n'apparaissent pas | L'appareil qui joue la musique ne permet pas de régler son volume à distance : c'est souvent le cas des téléphones. Lance la lecture sur un ordinateur ou une enceinte connectée. Ils sont aussi absents quand rien n'est en lecture, ou si `VOLUME_MAX` vaut `0`. |
+| Le volume baisse sur la page mais le son reste fort | La page règle le volume de Spotify, pas celui de l'ordinateur ou de l'enceinte. Baisse aussi celui-ci. |
 | « La connexion au compte Spotify a expiré » | Voir « À refaire tous les six mois ». |
 | Tes collègues n'arrivent pas à ouvrir le lien (script sur ton ordinateur) | Ils doivent être sur le même réseau que toi, et ton pare-feu doit autoriser Node.js. Certains Wi-Fi invités empêchent les appareils de se voir : dans ce cas, passe par Vercel. |
 | « Le port 3000 est déjà pris » | Un autre programme l'utilise. Ferme-le, ou change `PORT`. |
@@ -153,7 +159,7 @@ Sur ton ordinateur, ils se trouvent dans le fichier `.env` ; relance `npm start`
 
 - Aucune dépendance à installer.
 - Le Client secret et le refresh token restent côté serveur. Le navigateur des visiteurs ne les voit jamais.
-- L'autorisation demandée à Spotify se limite à lire la lecture en cours, ajouter des titres à la file et passer au titre suivant.
+- L'autorisation demandée à Spotify se limite à lire la lecture en cours, ajouter des titres à la file, passer au titre suivant et régler le volume.
 - Sur ton ordinateur, seul cet ordinateur peut relier ou changer le compte Spotify : `/api/login` est refusé aux autres appareils.
-- Les limites sont volontairement simples : le délai tient dans un cookie signé, et un plafond de 30 demandes par 10 minutes s'applique par adresse IP. Un autre cookie signé distingue les navigateurs, pour compter les personnes en ligne et donner un vote à chacune. Ces limites découragent les abus entre collègues, pas une attaque déterminée. Garde un `ACCESS_CODE`.
+- Les limites sont volontairement simples : chaque délai tient dans un cookie signé, et un plafond par adresse IP s'applique par 10 minutes : 30 demandes, 60 réglages du volume. Un autre cookie signé distingue les navigateurs, pour compter les personnes en ligne et donner un vote à chacune. Ces limites découragent les abus entre collègues, pas une attaque déterminée. Garde un `ACCESS_CODE`.
 - Les votes et le nombre de personnes en ligne sont gardés dans la mémoire du serveur : ils repartent de zéro quand tu relances le script. Sur Vercel, les visiteurs peuvent être répartis sur plusieurs instances qui ne partagent pas leur mémoire : le compteur peut alors être sous-estimé, et un titre passé avec moins de votes.

@@ -501,6 +501,54 @@ a:focus-visible {
   cursor: default;
 }
 
+/* The volume: one step down or up, within the limits the owner set. */
+.volume {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The level, after a small loudspeaker. */
+.level {
+  min-width: calc(22px + 4ch);
+  padding-left: 22px;
+  font: 700 0.8rem var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--cyan);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233df0e0' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 9.5v5h3.5l5 4v-13l-5 4z'/%3E%3Cpath d='M16.5 8.5a5 5 0 0 1 0 7'/%3E%3C/svg%3E") 0 50% / 16px no-repeat;
+  text-shadow: 0 0 8px rgb(var(--cyan-rgb) / 0.7);
+  white-space: nowrap;
+}
+
+.step {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  font: 700 1.1rem/1 var(--mono);
+  color: var(--cyan);
+  background: rgb(var(--cyan-rgb) / 0.08);
+  border: 1.5px solid var(--cyan);
+  border-radius: 50%;
+  box-shadow: 0 0 12px rgb(var(--cyan-rgb) / 0.35), inset 0 0 8px rgb(var(--cyan-rgb) / 0.2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.step:hover:not(:disabled) {
+  color: #04211e;
+  background: var(--cyan);
+}
+
+/* At a limit, or during the wait between two changes. */
+.step:disabled {
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--border);
+  box-shadow: none;
+  cursor: default;
+}
+
 /* --- Track rows ---------------------------------------------------------------- */
 
 .tracks {
@@ -637,7 +685,7 @@ a:focus-visible {
   to { --neon-angle: 360deg; }
 }
 
-/* The skip button sits next to the track, or under it when space is short. */
+/* The volume and the skip button sit next to the track, or under it when space is short. */
 .now-row {
   display: flex;
   flex-wrap: wrap;
@@ -827,6 +875,18 @@ a:focus-visible {
 
   .now .title {
     font-size: 1.45rem;
+  }
+}
+
+/* Keeps the volume and the skip button on one line on the smallest phones. */
+@media (max-width: 350px) {
+  .volume {
+    gap: 4px;
+  }
+
+  .step {
+    width: 32px;
+    height: 32px;
   }
 }
 

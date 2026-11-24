@@ -33,6 +33,10 @@ function track(n, name) {
   };
 }
 
+function device(fields) {
+  return { id: 'device-1', is_active: true, is_restricted: false, supports_volume: true, ...fields };
+}
+
 function reply(status, body) {
   const text = body === undefined ? null : typeof body === 'string' ? body : JSON.stringify(body);
   return new Response(status === 204 ? null : text, { status });
@@ -51,6 +55,8 @@ function fakeSpotify() {
     track: () => reply(200, track(5, 'Par lien')),
     add: () => reply(204),
     next: () => reply(204),
+    player: () => reply(200, { is_playing: true, device: device({ volume_percent: 40 }) }),
+    volume: () => reply(204),
   };
   globalThis.fetch = async (input, init = {}) => {
     const url = new URL(String(input));
@@ -62,6 +68,8 @@ function fakeSpotify() {
     if (route === 'GET api.spotify.com/v1/me/player/queue') return state.queue(call);
     if (route === 'POST api.spotify.com/v1/me/player/queue') return state.add(call);
     if (route === 'POST api.spotify.com/v1/me/player/next') return state.next(call);
+    if (route === 'GET api.spotify.com/v1/me/player') return state.player(call);
+    if (route === 'PUT api.spotify.com/v1/me/player/volume') return state.volume(call);
     if (route === 'GET api.spotify.com/v1/search') return state.search(call);
     if (route.startsWith('GET api.spotify.com/v1/tracks/')) return state.track(call);
     throw new Error(`Unexpected call to Spotify: ${route}`);
@@ -102,6 +110,18 @@ function browser() {
 }
 
 const skip = (uri) => ({ method: 'POST', body: { skip: uri } });
+const turn = (direction) => ({ method: 'POST', body: { volume: direction } });
+
+/** Gives the fake Spotify a device whose volume can be read and set. */
+function speaker(percent, fields = {}) {
+  const box = { percent };
+  spotify.player = () => reply(200, { is_playing: true, device: device({ volume_percent: box.percent, ...fields }) });
+  spotify.volume = ({ url }) => {
+    box.percent = Number(url.searchParams.get('volume_percent'));
+    return reply(204);
+  };
+  return box;
+}
 
 beforeEach(() => {
   run += 1;
@@ -111,6 +131,8 @@ beforeEach(() => {
   process.env.SPOTIFY_REFRESH_TOKEN = `refresh-${run}`;
   process.env.ACCESS_CODE = CODE;
   delete process.env.COOLDOWN_SECONDS;
+  delete process.env.VOLUME_MAX;
+  delete process.env.VOLUME_MIN;
   resetRoom();
   spotify = fakeSpotify();
 });
@@ -191,12 +213,14 @@ test('queue shows what is playing and what comes next, with one token for all ca
   assert.equal(body.playing.name, 'En cours');
   assert.deepEqual(body.next.map((t) => t.name), ['Suivant']);
   assert.equal(body.cooldown, 0);
+  assert.deepEqual(body.volume, { percent: 40, min: 10, max: 50, wait: 0 });
 
   await queue(call('/api/queue'));
   await search(call('/api/search?q=abc'));
   assert.equal(spotify.count('POST', '/api/token'), 1);
   // The second /api/queue was served from the short cache.
   assert.equal(spotify.count('GET', '/v1/me/player/queue'), 1);
+  assert.equal(spotify.count('GET', '/v1/me/player'), 1);
 
   const token = spotify.calls.find((c) => c.url.pathname === '/api/token');
   assert.equal(token.headers.authorization, `Basic ${Buffer.from('client-id:client-secret').toString('base64')}`);
@@ -205,8 +229,9 @@ test('queue shows what is playing and what comes next, with one token for all ca
 
 test('queue copes with nothing playing', async () => {
   spotify.queue = () => reply(200, { currently_playing: null, queue: [] });
+  spotify.player = () => reply(204);
   const body = await (await queue(call('/api/queue'))).json();
-  assert.deepEqual(body, { playing: null, next: [], cooldown: 0, present: 1, skip: null });
+  assert.deepEqual(body, { playing: null, next: [], cooldown: 0, present: 1, skip: null, volume: null });
 });
 
 test('a request adds the track, then the same browser has to wait', async () => {
@@ -355,6 +380,158 @@ test('a vote needs the access code and a JSON body naming the track', async () =
   assert.equal((await vote(call('/api/queue', { ...skip(uri), headers: { 'content-type': 'text/plain' } }))).status, 415);
   assert.equal((await vote(call('/api/queue', { method: 'POST', body: {} }))).status, 400);
   assert.equal(spotify.calls.length, 0);
+});
+
+test('no volume control when the device cannot be set from elsewhere', async () => {
+  const devices = [{ supports_volume: false }, { is_restricted: true }, { volume_percent: null }];
+  for (const [i, fields] of devices.entries()) {
+    process.env.SPOTIFY_REFRESH_TOKEN = `refresh-${run}-${i}`; // a new token starts with an empty cache
+    speaker(40, fields);
+    const body = await (await queue(call('/api/queue'))).json();
+    assert.equal(body.volume, null, JSON.stringify(fields));
+    assert.equal(body.playing.name, 'En cours');
+  }
+
+  // The rest of the page does not depend on the volume being readable.
+  process.env.SPOTIFY_REFRESH_TOKEN = `refresh-${run}-failing`;
+  spotify.player = () => reply(500, { error: { status: 500, message: 'Server error' } });
+  const res = await queue(call('/api/queue'));
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).volume, null);
+});
+
+test('a visitor turns the volume down one step, then has to wait', async () => {
+  const box = speaker(40);
+  const alice = browser();
+  const res = await alice(vote, '/api/queue', turn('down'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { volume: { percent: 30, min: 10, max: 50, wait: 10 } });
+  assert.equal(box.percent, 30);
+  assert.match(
+    res.headers.get('set-cookie'),
+    /^sr_vol=\d+\.[\w-]+; Path=\/; Max-Age=10; HttpOnly; SameSite=Lax; Secure$/,
+  );
+
+  const again = await alice(vote, '/api/queue', turn('down'));
+  assert.equal(again.status, 429);
+  const refused = await again.json();
+  assert.equal(refused.error, 'volume_wait');
+  assert.ok(refused.retryAfter > 0 && refused.retryAfter <= 10);
+  assert.equal(spotify.count('PUT', '/v1/me/player/volume'), 1);
+
+  // The page restores the wait after a reload.
+  const state = await (await alice(queue, '/api/queue')).json();
+  assert.equal(state.volume.percent, 30);
+  assert.ok(state.volume.wait > 0 && state.volume.wait <= 10);
+
+  // Someone else does not have to wait.
+  const bob = browser();
+  assert.equal((await (await bob(vote, '/api/queue', turn('down'))).json()).volume.percent, 20);
+});
+
+test('the page shows the volume that was just set, even while Spotify still reports the old one', async () => {
+  speaker(40);
+  await queue(call('/api/queue'));
+  spotify.volume = () => reply(204); // accepted, but not reflected yet in what Spotify reports
+  await vote(call('/api/queue', turn('down')));
+  assert.equal((await (await queue(call('/api/queue'))).json()).volume.percent, 30);
+});
+
+test('a wait cookie only counts for the action it was signed for', async () => {
+  speaker(40);
+  const requested = await request(call('/api/request', { method: 'POST', body: { uri: track(7).uri } }));
+  const signed = requested.headers.get('set-cookie').split(';')[0].replace('sr_last=', '');
+  for (const cookie of [`sr_vol=${signed}`, `sr_vol=${Date.now()}.forged`]) {
+    const res = await vote(call('/api/queue', { ...turn('down'), headers: { cookie } }));
+    assert.equal(res.status, 200, cookie);
+  }
+});
+
+test('the volume never goes above the ceiling from the page', async () => {
+  const box = speaker(45);
+  const up = await vote(call('/api/queue', turn('up')));
+  assert.equal((await up.json()).volume.percent, 50);
+  assert.equal(box.percent, 50);
+
+  const refused = await vote(call('/api/queue', turn('up')));
+  assert.equal(refused.status, 409);
+  assert.equal(refused.headers.get('set-cookie'), null);
+  const body = await refused.json();
+  assert.equal(body.error, 'volume_limit');
+  assert.deepEqual(body.volume, { percent: 50, min: 10, max: 50, wait: 0 });
+  assert.equal(spotify.count('PUT', '/v1/me/player/volume'), 1);
+
+  // The owner went louder from Spotify itself: the page can only bring it down.
+  box.percent = 80;
+  assert.equal((await vote(call('/api/queue', turn('up')))).status, 409);
+  assert.equal(box.percent, 80);
+  assert.equal((await (await vote(call('/api/queue', turn('down')))).json()).volume.percent, 70);
+});
+
+test('the volume does not go under the floor', async () => {
+  const box = speaker(15);
+  assert.equal((await (await vote(call('/api/queue', turn('down')))).json()).volume.percent, 10);
+  const refused = await vote(call('/api/queue', turn('down')));
+  assert.equal(refused.status, 409);
+  assert.equal((await refused.json()).error, 'volume_limit');
+  assert.equal(box.percent, 10);
+});
+
+test('VOLUME_MAX and VOLUME_MIN move the limits, and VOLUME_MAX=0 takes the control away', async () => {
+  process.env.VOLUME_MAX = '30';
+  process.env.VOLUME_MIN = '20';
+  const box = speaker(25);
+  assert.deepEqual((await (await vote(call('/api/queue', turn('up')))).json()).volume, {
+    percent: 30,
+    min: 20,
+    max: 30,
+    wait: 10,
+  });
+  assert.equal((await vote(call('/api/queue', turn('up')))).status, 409);
+  assert.equal((await (await vote(call('/api/queue', turn('down')))).json()).volume.percent, 20);
+  assert.equal((await vote(call('/api/queue', turn('down')))).status, 409);
+
+  process.env.VOLUME_MAX = '0';
+  process.env.SPOTIFY_REFRESH_TOKEN = `refresh-${run}-off`;
+  spotify.calls.length = 0;
+  assert.equal((await (await queue(call('/api/queue'))).json()).volume, null);
+  const refused = await vote(call('/api/queue', turn('down')));
+  assert.equal(refused.status, 403);
+  assert.equal((await refused.json()).error, 'volume_off');
+  assert.equal(spotify.count('GET', '/v1/me/player'), 0);
+  assert.equal(box.percent, 20);
+});
+
+test('a volume change needs a known direction and a device that accepts it', async () => {
+  for (const volume of ['loud', 5, null, '']) {
+    assert.equal((await vote(call('/api/queue', { method: 'POST', body: { volume } }))).status, 400);
+  }
+  assert.equal((await vote(call('/api/queue', { ...turn('down'), code: null }))).status, 401);
+  assert.equal(spotify.calls.length, 0);
+
+  spotify.volume = () =>
+    reply(403, {
+      error: { status: 403, message: 'Player command failed: Cannot control device volume', reason: 'VOLUME_CONTROL_DISALLOW' },
+    });
+  const refused = await vote(call('/api/queue', turn('down')));
+  assert.equal(refused.status, 409);
+  assert.equal((await refused.json()).error, 'volume_unavailable');
+  assert.equal(refused.headers.get('set-cookie'), null);
+
+  spotify.player = () => reply(204);
+  const idle = await vote(call('/api/queue', turn('down')));
+  assert.equal(idle.status, 409);
+  assert.equal((await idle.json()).error, 'volume_unavailable');
+});
+
+test('volume changes from one address are capped', async () => {
+  const box = speaker(30);
+  let last;
+  for (let i = 0; i < 61; i += 1) last = await vote(call('/api/queue', turn(i % 2 ? 'up' : 'down')));
+  assert.equal(last.status, 429);
+  assert.equal((await last.json()).error, 'rate_limited');
+  assert.equal(spotify.count('PUT', '/v1/me/player/volume'), 60);
+  assert.equal(box.percent, 30);
 });
 
 test('COOLDOWN_SECONDS=0 removes the wait', async () => {
