@@ -1,11 +1,12 @@
-// GET  /api/queue                    -> { playing, next, cooldown, present, skip, volume }
+// GET  /api/queue                    -> { playing, progress, next, cooldown, present, people, reactions, skip, volume }
 // POST /api/queue { skip: <uri> }    -> this browser's vote to skip the track that is playing
 // POST /api/queue { volume: "down" } -> one step down; "up" for one step up, never past the ceiling
+// POST /api/queue { react: "🔥" }    -> this browser's avatar says it, for everyone to see
 //
-// Both actions are handled here rather than in routes of their own because
-// they share memory with the GET: the people present for the vote, what was
-// last read from the player for the volume. On Vercel every file under api/
-// is a separate function with its own memory.
+// The actions are handled here rather than in routes of their own because
+// they share memory with the GET: the people present for the vote and the
+// reactions, what was last read from the player for the volume. On Vercel
+// every file under api/ is a separate function with its own memory.
 
 import { getConfig } from '../lib/config.js';
 import {
@@ -18,8 +19,20 @@ import {
   volumeWait,
 } from '../lib/guard.js';
 import { clientIp, fail, json } from '../lib/http.js';
-import { closeVote, markPresent, presentCount, reopenVote, skipTally, voteToSkip } from '../lib/room.js';
-import { getQueue, getVolume, setVolume, skipToNext, spotifyFailure } from '../lib/spotify.js';
+import {
+  cleanAvatar,
+  closeVote,
+  markPresent,
+  presentCount,
+  presentPeople,
+  react,
+  REACTIONS,
+  reopenVote,
+  skipTally,
+  voteToSkip,
+  wear,
+} from '../lib/room.js';
+import { getPlayback, getQueue, getVolume, setVolume, skipToNext, spotifyFailure } from '../lib/spotify.js';
 import { nextVolume } from '../lib/volume.js';
 
 // Every open page polls this; a short cache keeps Spotify from being asked each time.
@@ -31,18 +44,43 @@ const VOLUME_SETTLE_MS = 5000;
 let cached = null;
 let trusted = null;
 
-/** What is playing, what comes next, and the volume (null when visitors cannot set it). */
+/**
+ * What is playing and how far into it the player is, what comes next, and the
+ * volume (null when visitors cannot set it).
+ */
 async function playerState(cfg) {
-  if (cached?.key !== cfg.refreshToken || Date.now() - cached.at > CACHE_MS) {
-    const [queue, volume] = await Promise.all([
+  if (cached?.key !== cfg.refreshToken || Date.now() - cached.at > CACHE_MS || trackOver(cached)) {
+    const [queue, playback] = await Promise.all([
       getQueue(),
-      // The volume is a nicety: when it cannot be read, the page still does its job.
-      cfg.volumeMax ? getVolume().catch(() => null) : null,
+      // Progress and volume are niceties: when they cannot be read, the page still does its job.
+      getPlayback().catch(() => null),
     ]);
-    cached = { key: cfg.refreshToken, at: Date.now(), ...queue, volume };
+    cached = { key: cfg.refreshToken, at: Date.now(), ...queue, playback };
   }
   const settling = trusted?.key === cfg.refreshToken && Date.now() < trusted.until;
-  return { playing: cached.playing, next: cached.next, volume: settling ? trusted.percent : cached.volume };
+  const volume = cfg.volumeMax ? (cached.playback?.volume ?? null) : null;
+  return {
+    playing: cached.playing,
+    progress: progressOf(cached),
+    next: cached.next,
+    volume: settling ? trusted.percent : volume,
+  };
+}
+
+/**
+ * How far into the track the player is right now: { ms, paused }. Null when
+ * it is not known, or was read for another track than the one shown.
+ */
+function progressOf({ playing, playback, at }, now = Date.now()) {
+  if (!playing || playback?.progressMs == null || playback.uri !== playing.uri) return null;
+  const ms = playback.progressMs + (playback.paused ? 0 : now - at);
+  return { ms: playing.durationMs ? Math.min(ms, playing.durationMs) : ms, paused: playback.paused };
+}
+
+/** The track that was playing should have ended by now: the cache is out of date. */
+function trackOver(state, now = Date.now()) {
+  const progress = progressOf(state, now);
+  return Boolean(progress && !progress.paused && state.playing.durationMs && progress.ms >= state.playing.durationMs && now - state.at > 1000);
 }
 
 function trustVolume(cfg, percent) {
@@ -52,6 +90,20 @@ function trustVolume(cfg, percent) {
 /** The volume as the page gets it; `wait` is the seconds before this browser may move it. */
 function volumeInfo(percent, wait, cfg) {
   return percent === null ? null : { percent, min: cfg.volumeMin, max: cfg.volumeMax, wait };
+}
+
+/**
+ * The avatar a browser sends along with every poll, in a header. It is kept
+ * in the browser: the server only passes it on, so it survives a restart.
+ */
+function avatarOf(request) {
+  const sent = request.headers.get('x-avatar');
+  if (!sent || sent.length > 600) return null;
+  try {
+    return cleanAvatar(JSON.parse(decodeURIComponent(sent)));
+  } catch {
+    return null;
+  }
 }
 
 /** Hands a new visitor their cookie, whatever the answer is. */
@@ -67,14 +119,18 @@ export async function GET(request) {
 
   const visitor = identify(request, cfg);
   markPresent(visitor.id);
+  wear(visitor.id, avatarOf(request));
   try {
-    const { playing, next, volume } = await playerState(cfg);
+    const { playing, progress, next, volume } = await playerState(cfg);
     return withCookie(
       json({
         playing,
+        progress,
         next: next.slice(0, SHOWN),
         cooldown: cooldownRemaining(request, cfg),
         present: presentCount(),
+        people: presentPeople(visitor.id),
+        reactions: REACTIONS,
         skip: skipTally(playing?.uri, visitor.id),
         volume: volumeInfo(volume, volumeWait(request, cfg), cfg),
       }),
@@ -99,9 +155,21 @@ export async function POST(request) {
     if (body.volume !== 'down' && body.volume !== 'up') return fail(400, 'bad_request', 'Réglage invalide.');
     return changeVolume(request, cfg, body.volume);
   }
+  if (body?.react !== undefined) return sendReaction(request, cfg, body.react);
   const uri = typeof body?.skip === 'string' ? body.skip : '';
   if (!uri) return fail(400, 'bad_request', 'Vote invalide.');
   return voteSkip(request, cfg, uri);
+}
+
+function sendReaction(request, cfg, emoji) {
+  const visitor = identify(request, cfg);
+  const send = (response) => withCookie(response, visitor.cookie);
+  if (!visitor.id || rateLimit(`react:${visitor.id}`, 5, 10_000)) {
+    return send(fail(429, 'rate_limited', 'Doucement sur les réactions.'));
+  }
+  markPresent(visitor.id);
+  if (!react(visitor.id, emoji)) return send(fail(400, 'bad_request', 'Réaction inconnue.'));
+  return send(json({ ok: true }));
 }
 
 async function voteSkip(request, cfg, uri) {

@@ -1,7 +1,12 @@
+import { avatarHeader, reactAsMe, renderCrowd, setUpAvatars } from './avatars.js';
+
 const $ = (id) => document.getElementById(id);
 
 const views = { setup: $('view-setup'), code: $('view-code'), main: $('view-main') };
 const POLL_MS = 15_000;
+// While reactions fly, the page looks more often, so that they arrive in time.
+const LIVELY_POLL_MS = 3_000;
+const LIVELY_FOR_MS = 30_000;
 
 // localStorage can be unavailable (private mode, blocked site data).
 const storage = {
@@ -24,6 +29,11 @@ const storage = {
 let accessCode = storage.get('sr_code');
 let currentView = null;
 let playingUri = null;
+// Where the track was when the server last said: { ms, paused, at, total, uri }.
+let progress = null;
+let endTimer = 0;
+let livelyUntil = 0;
+let pollTimer = 0;
 let volume = null;
 let volumeBusy = false;
 let volumeUntil = 0;
@@ -83,7 +93,10 @@ function el(tag, className, text) {
 function show(name) {
   currentView = name;
   for (const [key, node] of Object.entries(views)) node.hidden = key !== name;
-  if (name !== 'main') renderPresent(0);
+  if (name !== 'main') {
+    renderPresent(0);
+    renderCrowd([]);
+  }
 }
 
 /** Narrow screens only: which of the two panes is on screen. */
@@ -176,6 +189,48 @@ function renderNow(track, errorMessage) {
   }
 }
 
+/**
+ * `state` is { ms, paused }, how far into `track` the player is, or null when
+ * that is not known. The bar then moves on its own between two polls.
+ */
+function renderProgress(state, track) {
+  clearTimeout(endTimer);
+  const total = track?.durationMs ?? 0;
+  const sameTrack = progress?.uri === track?.uri;
+  progress = state && total > 0 ? { ...state, at: Date.now(), total, uri: track.uri } : null;
+  $('progress').hidden = !progress;
+  document.querySelector('.now').classList.toggle('paused', Boolean(progress?.paused));
+  if (!progress) return;
+
+  $('progress-end').textContent = duration(total);
+  $('progress-bar').setAttribute('aria-valuemax', String(Math.round(total / 1000)));
+  // A new track starts from the left at once, instead of sliding back there.
+  const fill = $('progress-fill');
+  if (!sameTrack) fill.style.transition = 'none';
+  tickProgress();
+  if (!sameTrack) {
+    void fill.offsetWidth;
+    fill.style.transition = '';
+  }
+
+  // The track changes when it ends: do not wait for the next poll to show the next one.
+  if (!progress.paused && total > progress.ms) {
+    endTimer = setTimeout(() => {
+      if (currentView === 'main' && document.visibilityState === 'visible') refreshQueue();
+    }, total - progress.ms + 1500);
+  }
+}
+
+function tickProgress() {
+  if (!progress) return;
+  const ms = Math.min(progress.total, progress.ms + (progress.paused ? 0 : Date.now() - progress.at));
+  const elapsed = duration(Math.floor(ms / 1000) * 1000);
+  $('progress-now').textContent = elapsed;
+  $('progress-fill').style.width = `${(ms / progress.total) * 100}%`;
+  $('progress-bar').setAttribute('aria-valuenow', String(Math.floor(ms / 1000)));
+  $('progress-bar').setAttribute('aria-valuetext', `${elapsed} sur ${duration(progress.total)}`);
+}
+
 function renderNext(tracks) {
   $('next').replaceChildren(...tracks.map((track) => trackRow(track)));
   $('next-empty').hidden = tracks.length > 0;
@@ -231,6 +286,24 @@ function updateVolumeButtons() {
   $('volume-up').disabled = held || atMax;
   $('volume-down').title = atMin ? `Pas en dessous de ${volume.min} % depuis cette page.` : '';
   $('volume-up').title = atMax ? `Pas au-dessus de ${volume.max} % depuis cette page.` : '';
+}
+
+/** One button per reaction the server knows: a tap makes this browser's avatar say it. */
+function renderReactions(emojis) {
+  const bar = $('reactions');
+  bar.hidden = emojis.length === 0;
+  const shown = emojis.join(' ');
+  if (bar.dataset.shown === shown) return;
+  bar.dataset.shown = shown;
+  bar.replaceChildren(
+    ...emojis.map((emoji) => {
+      const button = el('button', 'react', emoji);
+      button.type = 'button';
+      button.setAttribute('aria-label', `Réagir avec ${emoji}`);
+      button.addEventListener('click', () => sendReaction(emoji));
+      return button;
+    }),
+  );
 }
 
 function renderResults(tracks) {
@@ -294,12 +367,16 @@ function updateCooldown() {
 async function refreshQueue() {
   const changes = volumeChanges;
   try {
-    const data = await api('/api/queue');
+    const data = await api('/api/queue', { headers: avatarHeader() });
     show('main');
     playingUri = data.playing?.uri ?? null;
     renderNow(data.playing);
+    renderProgress(data.progress, data.playing);
     renderNext(data.next);
     renderPresent(data.present);
+    // They dance while the music plays, and stop when it is paused.
+    if (renderCrowd(data.people, { dancing: Boolean(data.playing) && !data.progress?.paused })) stayLively();
+    renderReactions(data.reactions);
     renderSkip(data.skip);
     // An answer that was on its way while the volume was being changed is out of date.
     if (changes === volumeChanges) renderVolume(data.volume);
@@ -314,10 +391,29 @@ async function refreshQueue() {
     show('main');
     playingUri = null;
     renderNow(null, err.message);
+    renderProgress(null, null);
     renderNext([]);
     renderPresent(0);
+    renderCrowd([]);
+    renderReactions([]);
     renderSkip(null);
     renderVolume(null);
+  }
+}
+
+async function sendReaction(emoji) {
+  // Shown at once on this screen; the others get it with their next poll.
+  reactAsMe(emoji);
+  stayLively();
+  try {
+    await api('/api/queue', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ react: emoji }),
+    });
+  } catch (err) {
+    if (handleGate(err)) return;
+    toast(err.message, 'error');
   }
 }
 
@@ -441,6 +537,9 @@ $('search-form').addEventListener('submit', (event) => {
   runSearch();
 });
 
+// A new look is sent with the next poll: do not wait for it.
+setUpAvatars(refreshQueue);
+
 $('skip').addEventListener('click', voteSkip);
 $('volume-down').addEventListener('click', () => changeVolume('down'));
 $('volume-up').addEventListener('click', () => changeVolume('up'));
@@ -456,10 +555,27 @@ $('code-form').addEventListener('submit', (event) => {
   refreshQueue();
 });
 
-// Keep "now playing" fresh while the page is on screen.
-setInterval(() => {
-  if (currentView === 'main' && document.visibilityState === 'visible') refreshQueue();
-}, POLL_MS);
+setInterval(tickProgress, 1000);
+
+// Keep "now playing" and the people fresh while the page is on screen.
+function planPoll() {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(
+    async () => {
+      if (currentView === 'main' && document.visibilityState === 'visible') await refreshQueue();
+      planPoll();
+    },
+    Date.now() < livelyUntil ? LIVELY_POLL_MS : POLL_MS,
+  );
+}
+
+/** Someone has just reacted: look more often for a while. */
+function stayLively() {
+  livelyUntil = Date.now() + LIVELY_FOR_MS;
+  planPoll();
+}
+
+planPoll();
 
 document.addEventListener('visibilitychange', () => {
   if (currentView === 'main' && document.visibilityState === 'visible') refreshQueue();

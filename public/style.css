@@ -263,12 +263,20 @@ body::before {
   50% { opacity: 0; }
 }
 
-/* How many people have the page open. */
+/* Who is here: the count, and the way to one's own avatar. */
+.who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 .present {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin: 10px 0 0;
+  margin: 0;
   padding: 5px 12px;
   font-family: var(--mono);
   font-size: 0.78rem;
@@ -293,6 +301,34 @@ body::before {
 
 @keyframes neon-pulse {
   50% { transform: scale(0.6); opacity: 0.6; }
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 12px 2px 7px;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--pink-text);
+  background: rgb(10 6 23 / 0.7);
+  border: 1px solid rgb(var(--pink-rgb) / 0.65);
+  border-radius: 999px;
+  box-shadow: 0 0 16px rgb(var(--pink-rgb) / 0.3), inset 0 0 10px rgb(var(--pink-rgb) / 0.12);
+  text-shadow: 0 0 8px rgb(var(--pink-rgb) / 0.6);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.chip:hover {
+  background: rgb(var(--pink-rgb) / 0.2);
+}
+
+.mini {
+  display: block;
+  width: 20px;
 }
 
 /* --- Cards: dark panels edged with a tube. Pink for the music, cyan for the queue. */
@@ -765,6 +801,111 @@ a:focus-visible {
   color: var(--muted);
 }
 
+/* How far into the track the player is: the script moves the fill every
+   second, and the transition makes it glide. */
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.time {
+  flex: none;
+  min-width: 4ch;
+  font: 700 0.72rem var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--cyan);
+  text-shadow: 0 0 8px rgb(var(--cyan-rgb) / 0.5);
+}
+
+.time:last-child {
+  text-align: right;
+  color: var(--muted);
+  text-shadow: none;
+}
+
+.bar {
+  flex: 1;
+  height: 6px;
+  background: var(--field);
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.fill {
+  position: relative;
+  width: 0;
+  min-width: 6px;
+  height: 100%;
+  background: linear-gradient(90deg, var(--pink), var(--cyan));
+  border-radius: inherit;
+  box-shadow: 0 0 10px rgb(var(--cyan-rgb) / 0.6);
+  transition: width 1s linear;
+}
+
+/* The lit end of the tube. */
+.fill::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -4px;
+  width: 10px;
+  height: 10px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: #eafffd;
+  box-shadow: 0 0 8px var(--cyan), 0 0 16px var(--cyan);
+}
+
+/* Paused: the bar dims, the equalizer and the cover stop. */
+.now.paused .fill {
+  opacity: 0.55;
+}
+
+.now.paused .meta::before {
+  opacity: 0.45;
+  animation-play-state: paused;
+}
+
+.now.paused .cover {
+  animation: none;
+}
+
+/* Reactions: one tap, and one's avatar says it in a bubble. */
+.reactions {
+  display: flex;
+  gap: 5px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgb(var(--pink-rgb) / 0.22);
+}
+
+.react {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 46px;
+  height: 36px;
+  padding: 0;
+  font-size: 1.05rem;
+  line-height: 1;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: transform 0.12s, border-color 0.12s, box-shadow 0.12s;
+}
+
+.react:hover {
+  border-color: var(--cyan);
+  box-shadow: 0 0 12px rgb(var(--cyan-rgb) / 0.45);
+  transform: translateY(-2px) scale(1.08);
+}
+
+.react:active {
+  transform: scale(0.9);
+}
+
 /* --- Two panes: picking a track, and what is queued. One at a time behind the
    tabs on a narrow screen, side by side when there is room. ------------------ */
 
@@ -878,6 +1019,13 @@ a:focus-visible {
   }
 }
 
+/* A phone has less room: the characters are smaller. */
+@media (max-width: 480px) {
+  .figure {
+    width: 34px;
+  }
+}
+
 /* Keeps the volume and the skip button on one line on the smallest phones. */
 @media (max-width: 350px) {
   .volume {
@@ -944,10 +1092,350 @@ code {
   user-select: all;
 }
 
+/* --- The crowd: one small character per person, strolling along the bottom of
+   the screen. They are drawn over the page but let every click through. ------ */
+
+.crowd {
+  position: fixed;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 150px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* The script sets where each one stands and how long the walk there takes. */
+.walker {
+  position: absolute;
+  left: 0;
+  bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 44px;
+  transition: transform linear;
+  animation: walker-in 0.4s ease-out;
+}
+
+.walker.leaving {
+  animation: walker-out 0.4s ease-in forwards;
+}
+
+@keyframes walker-in {
+  from { opacity: 0; }
+}
+
+@keyframes walker-out {
+  to { opacity: 0; }
+}
+
+/* What a character says: an emoji in a bubble, for a few seconds. The script
+   takes it away when this animation ends. */
+.bubble {
+  position: relative;
+  margin-bottom: 7px;
+  padding: 2px 7px;
+  font-size: 1.05rem;
+  line-height: 1.35;
+  background: #0d0820;
+  border: 1.5px solid currentColor;
+  border-radius: 12px;
+  box-shadow: 0 0 12px currentColor;
+  animation: bubble 4s ease-in-out forwards;
+}
+
+/* Its tail. */
+.bubble::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 7px;
+  height: 7px;
+  margin-left: -4px;
+  background: inherit;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+@keyframes bubble {
+  0% { opacity: 0; transform: translateY(8px) scale(0.3); }
+  7% { opacity: 1; transform: scale(1.18); }
+  12% { transform: scale(1); }
+  85% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-14px); }
+}
+
+/* The small jump that goes with it. */
+.figure.hop {
+  animation: walker-hop 0.55s ease-out;
+}
+
+@keyframes walker-hop {
+  35% { transform: translateY(-12px); }
+  70% { transform: translateY(0); }
+  85% { transform: translateY(-4px); }
+}
+
+/* The name over the head. */
+.tag {
+  max-width: 120px;
+  margin-bottom: 2px;
+  padding: 0 6px;
+  overflow: hidden;
+  font: 700 0.62rem/1.5 var(--mono);
+  background: rgb(10 6 23 / 0.8);
+  border-radius: 6px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.walker.you .tag {
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+.figure {
+  display: block;
+  width: 40px;
+}
+
+/* A character takes the colour of what holds it. */
+.sprite {
+  display: block;
+  width: 100%;
+  overflow: visible;
+  filter: drop-shadow(0 0 5px currentColor);
+}
+
+.sprite .body {
+  fill: #150d2e;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linejoin: round;
+}
+
+.sprite .foot,
+.sprite .solid {
+  fill: currentColor;
+}
+
+.sprite .eyes {
+  fill: #fff;
+  transition: transform 0.2s;
+}
+
+.sprite .line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sprite .band {
+  stroke: #fff;
+}
+
+.sprite .shade {
+  fill: #0a0617;
+  stroke: #fff;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.sprite .gold {
+  fill: rgb(255 224 102 / 0.25);
+  stroke: #ffe066;
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+}
+
+/* The same characters, in pixels. */
+.px-body {
+  fill: currentColor;
+}
+
+.px-dark {
+  fill: #0a0617;
+}
+
+.px-white {
+  fill: #fff;
+}
+
+.px-gold {
+  fill: #ffe066;
+}
+
+/* Walking: the body bobs, the feet take turns, the eyes look where it goes. */
+.walking .sprite {
+  animation: walker-bob 0.36s ease-in-out infinite alternate;
+}
+
+.walking .foot-l {
+  animation: walker-foot 0.36s ease-in-out infinite alternate;
+}
+
+.walking .foot-r {
+  animation: walker-foot 0.36s ease-in-out infinite alternate-reverse;
+}
+
+.walking .eyes {
+  transform: translateX(2.5px);
+}
+
+.walking.left .eyes {
+  transform: translateX(-2.5px);
+}
+
+@keyframes walker-bob {
+  to { transform: translateY(-2px) rotate(2deg); }
+}
+
+@keyframes walker-foot {
+  to { transform: translateY(-4px); }
+}
+
+/* Pixels move by jumps, and never lean. */
+.walking .sprite.pixel {
+  animation: pixel-step 0.3s steps(2, jump-none) infinite;
+}
+
+.dancing .walker:not(.walking) .sprite.pixel {
+  animation: pixel-dance 0.48s steps(2, jump-none) var(--offset, 0s) infinite;
+}
+
+@keyframes pixel-step {
+  to { transform: translateY(-3px); }
+}
+
+@keyframes pixel-dance {
+  from { transform: translate(-2px, 0); }
+  to { transform: translate(2px, -4px); }
+}
+
+/* Standing still while music plays: they dance. */
+.dancing .walker:not(.walking) .sprite {
+  transform-origin: 50% 100%;
+  animation: walker-dance 0.48s ease-in-out var(--offset, 0s) infinite alternate;
+}
+
+@keyframes walker-dance {
+  from { transform: scale(1.06, 0.94); }
+  to { transform: translateY(-5px) scale(0.96, 1.05); }
+}
+
+/* --- Choosing one's avatar ------------------------------------------------------ */
+
+.dialog {
+  width: min(430px, calc(100% - 32px));
+  max-height: calc(100% - 32px);
+  margin: auto;
+  padding: 20px;
+  overflow-y: auto;
+  color: var(--text);
+}
+
+.dialog::backdrop {
+  background: rgb(5 3 12 / 0.75);
+}
+
+.avatar-top {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+
+.preview {
+  flex: none;
+  width: 76px;
+  color: var(--avatar);
+}
+
+.field {
+  display: grid;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.dialog fieldset {
+  min-width: 0;
+  margin: 0 0 14px;
+  padding: 0;
+  border: 0;
+}
+
+.dialog legend {
+  margin-bottom: 8px;
+  padding: 0;
+  font: 600 0.72rem var(--mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.choice {
+  position: relative;
+  cursor: pointer;
+}
+
+/* The picture of one choice: a colour, a shape or an accessory. */
+.pick {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  color: var(--avatar);
+  background: var(--field);
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+}
+
+.pick .sprite {
+  width: 26px;
+}
+
+.pick:empty::before {
+  content: "";
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 10px currentColor;
+}
+
+.choice input:checked + .pick {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 2px rgb(var(--cyan-rgb) / 0.25), 0 0 14px rgb(var(--cyan-rgb) / 0.5);
+}
+
+.choice input:focus-visible + .pick {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.dialog .row {
+  margin-top: 18px;
+}
+
 /* --- Feedback after an action -------------------------------------------------- */
 
 .toast {
   position: fixed;
+  z-index: 10;
   left: 50%;
   bottom: 24px;
   transform: translateX(-50%);

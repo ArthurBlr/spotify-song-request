@@ -16,7 +16,12 @@
       <h1>Demande un titre</h1>
       <p class="lead">Cherche un morceau : il part dans la file d’attente.</p>
     </div>
-    <p id="present" class="present" hidden></p>
+    <div class="who">
+      <p id="present" class="present" hidden></p>
+      <button id="avatar-button" class="chip" type="button" hidden>
+        <span id="avatar-mini" class="mini"></span>Mon avatar
+      </button>
+    </div>
   </header>
 
   <!-- Shown while the owner has not finished the installation. -->
@@ -49,6 +54,15 @@
         </div>
         <button id="skip" class="ghost" type="button" hidden></button>
       </div>
+      <div id="progress" class="progress" hidden>
+        <span id="progress-now" class="time"></span>
+        <div id="progress-bar" class="bar" role="progressbar" aria-label="Avancement du titre" aria-valuemin="0">
+          <div id="progress-fill" class="fill"></div>
+        </div>
+        <span id="progress-end" class="time"></span>
+      </div>
+      <!-- One button per reaction: a tap, and one's avatar says it in a bubble. -->
+      <div id="reactions" class="reactions" role="group" aria-label="Réagir" hidden></div>
     </section>
 
     <!-- Narrow screens show one pane at a time; wide screens show both and hide these. -->
@@ -79,6 +93,43 @@
     </div>
   </div>
 </main>
+
+<!-- One small character per person on the page, strolling along the bottom of the screen
+     and saying their reactions. -->
+<div id="crowd" class="crowd" aria-hidden="true"></div>
+
+<dialog id="avatar-dialog" class="card dialog" aria-labelledby="avatar-title">
+  <form id="avatar-form">
+    <h2 id="avatar-title" class="eyebrow">Mon avatar</h2>
+    <div class="avatar-top">
+      <div id="avatar-preview" class="preview"></div>
+      <label class="field">
+        Pseudo, visible par tous
+        <input id="avatar-name" type="text" maxlength="16" autocomplete="off" placeholder="Facultatif">
+      </label>
+    </div>
+    <fieldset>
+      <legend>Style</legend>
+      <div id="avatar-style" class="choices"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Couleur</legend>
+      <div id="avatar-color" class="choices"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Forme</legend>
+      <div id="avatar-body" class="choices"></div>
+    </fieldset>
+    <fieldset>
+      <legend>Accessoire</legend>
+      <div id="avatar-extra" class="choices"></div>
+    </fieldset>
+    <div class="row">
+      <button id="avatar-cancel" class="ghost" type="button">Annuler</button>
+      <button class="button" type="submit">Enregistrer</button>
+    </div>
+  </form>
+</dialog>
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 <script type="module" src="/app.js"></script>

@@ -55,7 +55,8 @@ function fakeSpotify() {
     track: () => reply(200, track(5, 'Par lien')),
     add: () => reply(204),
     next: () => reply(204),
-    player: () => reply(200, { is_playing: true, device: device({ volume_percent: 40 }) }),
+    player: () =>
+      reply(200, { is_playing: true, progress_ms: 60_000, item: track(1, 'En cours'), device: device({ volume_percent: 40 }) }),
     volume: () => reply(204),
   };
   globalThis.fetch = async (input, init = {}) => {
@@ -230,8 +231,18 @@ test('queue shows what is playing and what comes next, with one token for all ca
 test('queue copes with nothing playing', async () => {
   spotify.queue = () => reply(200, { currently_playing: null, queue: [] });
   spotify.player = () => reply(204);
-  const body = await (await queue(call('/api/queue'))).json();
-  assert.deepEqual(body, { playing: null, next: [], cooldown: 0, present: 1, skip: null, volume: null });
+  const { people, reactions, ...body } = await (await queue(call('/api/queue'))).json();
+  assert.deepEqual(body, {
+    playing: null,
+    progress: null,
+    next: [],
+    cooldown: 0,
+    present: 1,
+    skip: null,
+    volume: null,
+  });
+  assert.equal(people.length, 1);
+  assert.ok(reactions.length > 0);
 });
 
 test('a request adds the track, then the same browser has to wait', async () => {
@@ -293,6 +304,87 @@ test('queue counts the browsers that have the page open', async () => {
   const forged = await queue(call('/api/queue', { headers: { cookie: 'sr_id=alice.forged' } }));
   assert.match(forged.headers.get('set-cookie'), /^sr_id=/);
   assert.equal((await forged.json()).present, 3);
+});
+
+test('everyone present is listed with the avatar their browser sent', async () => {
+  const wearing = (value) => ({
+    headers: { 'x-avatar': typeof value === 'string' ? value : encodeURIComponent(JSON.stringify(value)) },
+  });
+  const alice = browser();
+  const bob = browser();
+  const look = { name: 'Alice', style: 1, color: 2, body: 3, extra: 1 };
+
+  const first = await alice(queue, '/api/queue', wearing(look));
+  const id = first.headers.get('set-cookie').match(/^sr_id=([\w-]+)\./)[1];
+  const [me] = (await first.json()).people;
+  assert.deepEqual(me, { key: me.key, you: true, avatar: look, reaction: null });
+  // The key tells people apart without giving away the id their cookie holds.
+  assert.match(me.key, /^[\w-]{10}$/);
+  assert.ok(!id.includes(me.key));
+
+  // Someone who has not chosen has no avatar: the page gives them a default one.
+  const seen = (await (await bob(queue, '/api/queue')).json()).people;
+  assert.deepEqual(seen, [
+    { key: me.key, you: false, avatar: look, reaction: null },
+    { key: seen[1].key, you: true, avatar: null, reaction: null },
+  ]);
+
+  // Something that is not an avatar leaves the last one in place.
+  for (const junk of ['not json', '%E0%A4%A', encodeURIComponent('"text"'), 'x'.repeat(700)]) {
+    const kept = (await (await alice(queue, '/api/queue', wearing(junk))).json()).people;
+    assert.deepEqual(kept.find((person) => person.you).avatar, look, junk.slice(0, 20));
+  }
+
+  // What was typed comes back as one short line; unknown numbers fall back to the first choice.
+  const odd = { name: '  <b>Un pseudo\n bien trop long</b> ', style: 2.5, color: 99, body: -1, extra: 'x', admin: true };
+  const cleaned = (await (await alice(queue, '/api/queue', wearing(odd))).json()).people;
+  assert.deepEqual(cleaned.find((person) => person.you).avatar, {
+    name: '<b>Un pseudo bie',
+    style: 0,
+    color: 0,
+    body: 0,
+    extra: 0,
+  });
+});
+
+test('an avatar says a reaction, for the others to see', async () => {
+  const saying = (react) => ({ method: 'POST', body: { react } });
+  const alice = browser();
+  const bob = browser();
+
+  // No need for Spotify, nor to have polled first.
+  const said = await alice(vote, '/api/queue', saying('🔥'));
+  assert.equal(said.status, 200);
+  assert.match(said.headers.get('set-cookie'), /^sr_id=/);
+  assert.equal(spotify.calls.length, 0);
+
+  const state = await (await bob(queue, '/api/queue')).json();
+  // The page builds its buttons from this list.
+  assert.ok(state.reactions.includes('🔥') && state.reactions.length >= 6);
+  const [her, him] = state.people;
+  assert.equal(her.reaction.emoji, '🔥');
+  assert.ok(Number.isInteger(her.reaction.at));
+  assert.equal(him.reaction, null);
+
+  // A later one replaces it, and can be told apart even when it is the same emoji.
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await alice(vote, '/api/queue', saying('🔥'));
+  const again = (await (await bob(queue, '/api/queue')).json()).people[0].reaction;
+  assert.ok(again.at > her.reaction.at);
+
+  // Only the emojis of the list, and only with the access code.
+  for (const react of ['💩', '<b>', 7, null]) {
+    const refused = await bob(vote, '/api/queue', saying(react));
+    assert.equal(refused.status, 400, String(react));
+  }
+  assert.equal((await vote(call('/api/queue', { ...saying('🔥'), code: null }))).status, 401);
+
+  // Five in ten seconds for one browser, then it has to slow down.
+  const carol = browser();
+  for (let i = 0; i < 5; i += 1) assert.equal((await carol(vote, '/api/queue', saying('👏'))).status, 200);
+  const tooMany = await carol(vote, '/api/queue', saying('👏'));
+  assert.equal(tooMany.status, 429);
+  assert.equal((await tooMany.json()).error, 'rate_limited');
 });
 
 test('a new visitor gets their id even when Spotify fails', async () => {
@@ -380,6 +472,47 @@ test('a vote needs the access code and a JSON body naming the track', async () =
   assert.equal((await vote(call('/api/queue', { ...skip(uri), headers: { 'content-type': 'text/plain' } }))).status, 415);
   assert.equal((await vote(call('/api/queue', { method: 'POST', body: {} }))).status, 400);
   assert.equal(spotify.calls.length, 0);
+});
+
+test('queue says how far into the track the player is', async () => {
+  const state = { is_playing: true, progress_ms: 60_000, item: track(1, 'En cours'), device: device({ volume_percent: 40 }) };
+  spotify.player = () => reply(200, state);
+  const first = (await (await queue(call('/api/queue'))).json()).progress;
+  assert.equal(first.paused, false);
+  assert.ok(first.ms >= 60_000 && first.ms < 61_000);
+
+  // Between two readings of Spotify the position keeps moving on its own.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const later = (await (await queue(call('/api/queue'))).json()).progress;
+  assert.ok(later.ms > first.ms && later.ms < 61_000);
+  assert.equal(spotify.count('GET', '/v1/me/player'), 1);
+
+  // Paused: it stays where it is.
+  process.env.SPOTIFY_REFRESH_TOKEN = `refresh-${run}-paused`;
+  Object.assign(state, { is_playing: false, progress_ms: 90_000 });
+  assert.deepEqual((await (await queue(call('/api/queue'))).json()).progress, { ms: 90_000, paused: true });
+
+  // Read for another track than the one the queue reports: better nothing than a wrong bar.
+  process.env.SPOTIFY_REFRESH_TOKEN = `refresh-${run}-other`;
+  state.item = track(2, 'Suivant');
+  assert.equal((await (await queue(call('/api/queue'))).json()).progress, null);
+});
+
+test('the end of the track is not held back by the cache', async () => {
+  // 201 s long, and the player is 400 ms from the end.
+  spotify.player = () =>
+    reply(200, { is_playing: true, progress_ms: 200_600, item: track(1, 'En cours'), device: device({ volume_percent: 40 }) });
+  await queue(call('/api/queue'));
+  await queue(call('/api/queue'));
+  assert.equal(spotify.count('GET', '/v1/me/player/queue'), 1);
+
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  spotify.queue = () => reply(200, { currently_playing: track(2, 'Suivant'), queue: [] });
+  spotify.player = () =>
+    reply(200, { is_playing: true, progress_ms: 300, item: track(2, 'Suivant'), device: device({ volume_percent: 40 }) });
+  const body = await (await queue(call('/api/queue'))).json();
+  assert.equal(body.playing.name, 'Suivant');
+  assert.ok(body.progress.ms < 2_000);
 });
 
 test('no volume control when the device cannot be set from elsewhere', async () => {
@@ -498,7 +631,6 @@ test('VOLUME_MAX and VOLUME_MIN move the limits, and VOLUME_MAX=0 takes the cont
   const refused = await vote(call('/api/queue', turn('down')));
   assert.equal(refused.status, 403);
   assert.equal((await refused.json()).error, 'volume_off');
-  assert.equal(spotify.count('GET', '/v1/me/player'), 0);
   assert.equal(box.percent, 20);
 });
 
