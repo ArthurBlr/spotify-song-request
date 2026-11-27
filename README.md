@@ -28,7 +28,7 @@ Deux façons de faire, à toi de choisir :
 
 ### A. Sur ton ordinateur
 
-1. Récupère ce repo : bouton **Code → Download ZIP**, ou `git clone`.
+1. Récupère ce repo avec `git clone https://github.com/ArthurBlr/spotify-song-request.git`. Le bouton **Code → Download ZIP** marche aussi, mais sans les mises à jour automatiques.
 2. Dans le dossier, lance :
 
    ```sh
@@ -47,6 +47,8 @@ Song request est prêt.
 ```
 
 Les fois suivantes, `npm start` suffit : tes réponses sont enregistrées dans le fichier `.env`.
+
+Pour passer à la dernière version, arrête la page (`Ctrl+C`) et relance `npm start` : il la récupère tout seul avant de démarrer. Ton `.env` est gardé, tu n'as rien à refaire. Il ne touche à rien si tu as modifié des fichiers du dossier.
 
 À savoir :
 
@@ -139,6 +141,7 @@ Sur ton ordinateur, ils se trouvent dans le fichier `.env` ; relance `npm start`
 | `VIP_CODE_HASHES` | Empreintes SHA-256 de codes qui débloquent des choix d'avatar réservés (voir plus bas) | vide |
 | `PORT` | Sur ton ordinateur seulement : port de la page. Si tu le changes, change aussi la Redirect URI de l'étape 1 | `3000` |
 | `HOST` | Sur ton ordinateur seulement : `127.0.0.1` rend la page invisible pour les autres appareils | `0.0.0.0` |
+| `AUTO_UPDATE` | Sur ton ordinateur seulement : `0` empêche `npm start` de récupérer la dernière version | `1` |
 
 ## Dépannage
 
@@ -163,6 +166,7 @@ Sur ton ordinateur, ils se trouvent dans le fichier `.env` ; relance `npm start`
 | `api/` | Une fonction par route : `login`, `callback`, `search`, `queue`, `request` |
 | `lib/` | Appels à Spotify, contrôle du code d'accès et des limites |
 | `local-server.js` | Le script lancé par `npm start` |
+| `update.js` | Lancé par `npm start` juste avant : récupère la dernière version |
 | `test/` | Tests, lancés par `npm test`. Ils simulent Spotify et ne demandent ni compte ni réseau |
 
 - Aucune dépendance à installer.

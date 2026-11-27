@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Page web de song request : chacun ajoute un titre à ta file d'attente Spotify, sans compte.",
   "scripts": {
-    "start": "node local-server.js",
+    "start": "node update.js && node local-server.js",
     "test": "node --test"
   }
 }
