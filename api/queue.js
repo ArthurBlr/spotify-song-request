@@ -1,12 +1,18 @@
-// GET  /api/queue                    -> { playing, progress, next, cooldown, present, people, reactions, skip, volume }
+// GET  /api/queue                    -> { playing, progress, requester, next, cooldown, present, people,
+//                                         can, skip, volume, vip }
+//                                       `requester` is who asked for the track that is playing;
+//                                       each track of `next` carries its own. `can` lists what
+//                                       an avatar may be made to do.
 // POST /api/queue { skip: <uri> }    -> this browser's vote to skip the track that is playing
 // POST /api/queue { volume: "down" } -> one step down; "up" for one step up, never past the ceiling
-// POST /api/queue { react: "🔥" }    -> this browser's avatar says it, for everyone to see
+// POST /api/queue { react: "🔥" }    -> this browser's avatar does it, for everyone to see. Also
+//                                       { move: "spin" }, { say: "Encore !" }, and
+//                                       { gift: "👏", to: <key> } for someone else present.
 //
 // The actions are handled here rather than in routes of their own because
-// they share memory with the GET: the people present for the vote and the
-// reactions, what was last read from the player for the volume. On Vercel
-// every file under api/ is a separate function with its own memory.
+// they share memory with the GET: the people present and what their avatars
+// do, what was last read from the player for the volume. On Vercel every
+// file under api/ is a separate function with its own memory.
 
 import { getConfig } from '../lib/config.js';
 import {
@@ -14,23 +20,31 @@ import {
   cooldownRemaining,
   identify,
   rateLimit,
+  requestsOf,
+  vipOf,
   VOLUME_WAIT,
   volumeCookie,
   volumeWait,
 } from '../lib/guard.js';
 import { clientIp, fail, json } from '../lib/http.js';
 import {
+  act,
   cleanAvatar,
   closeVote,
+  GIFTS,
   markPresent,
+  MOVES,
+  noteRequests,
   presentCount,
   presentPeople,
-  react,
   REACTIONS,
   reopenVote,
+  requesterOf,
+  SAYINGS,
   skipTally,
   voteToSkip,
   wear,
+  whoAsked,
 } from '../lib/room.js';
 import { getPlayback, getQueue, getVolume, setVolume, skipToNext, spotifyFailure } from '../lib/spotify.js';
 import { nextVolume } from '../lib/volume.js';
@@ -96,19 +110,21 @@ function volumeInfo(percent, wait, cfg) {
  * The avatar a browser sends along with every poll, in a header. It is kept
  * in the browser: the server only passes it on, so it survives a restart.
  */
-function avatarOf(request) {
+function avatarOf(request, vip) {
   const sent = request.headers.get('x-avatar');
   if (!sent || sent.length > 600) return null;
   try {
-    return cleanAvatar(JSON.parse(decodeURIComponent(sent)));
+    return cleanAvatar(JSON.parse(decodeURIComponent(sent)), vip);
   } catch {
     return null;
   }
 }
 
-/** Hands a new visitor their cookie, whatever the answer is. */
-function withCookie(response, cookie) {
-  if (cookie) response.headers.append('set-cookie', cookie);
+/** Hands a visitor the cookies they are due, whatever the answer is. */
+function withCookie(response, ...cookies) {
+  for (const cookie of cookies) {
+    if (cookie) response.headers.append('set-cookie', cookie);
+  }
   return response;
 }
 
@@ -118,26 +134,31 @@ export async function GET(request) {
   if (denied) return denied;
 
   const visitor = identify(request, cfg);
+  const { vip, cookie: vipCookie } = vipOf(request, cfg, visitor.id);
   markPresent(visitor.id);
-  wear(visitor.id, avatarOf(request));
+  wear(visitor.id, avatarOf(request, vip));
+  noteRequests(visitor.id, requestsOf(request, cfg, visitor.id));
   try {
     const { playing, progress, next, volume } = await playerState(cfg);
     return withCookie(
       json({
         playing,
         progress,
-        next: next.slice(0, SHOWN),
+        requester: requesterOf(playing?.uri ?? null, visitor.id),
+        next: next.slice(0, SHOWN).map((track) => ({ ...track, requester: whoAsked(track.uri, visitor.id) })),
         cooldown: cooldownRemaining(request, cfg),
         present: presentCount(),
         people: presentPeople(visitor.id),
-        reactions: REACTIONS,
+        can: { react: REACTIONS, move: MOVES, say: SAYINGS, give: GIFTS },
         skip: skipTally(playing?.uri, visitor.id),
         volume: volumeInfo(volume, volumeWait(request, cfg), cfg),
+        vip,
       }),
       visitor.cookie,
+      vipCookie,
     );
   } catch (err) {
-    return withCookie(spotifyFailure(err), visitor.cookie);
+    return withCookie(spotifyFailure(err), visitor.cookie, vipCookie);
   }
 }
 
@@ -155,20 +176,23 @@ export async function POST(request) {
     if (body.volume !== 'down' && body.volume !== 'up') return fail(400, 'bad_request', 'Réglage invalide.');
     return changeVolume(request, cfg, body.volume);
   }
-  if (body?.react !== undefined) return sendReaction(request, cfg, body.react);
+  for (const [field, kind] of [['react', 'emoji'], ['move', 'move'], ['say', 'say'], ['gift', 'gift']]) {
+    if (body?.[field] !== undefined) return showOff(request, cfg, kind, body[field], body.to);
+  }
   const uri = typeof body?.skip === 'string' ? body.skip : '';
   if (!uri) return fail(400, 'bad_request', 'Vote invalide.');
   return voteSkip(request, cfg, uri);
 }
 
-function sendReaction(request, cfg, emoji) {
+/** A reaction, a dance move, a few words or a gift: this browser's avatar does it for all to see. */
+function showOff(request, cfg, kind, value, to) {
   const visitor = identify(request, cfg);
   const send = (response) => withCookie(response, visitor.cookie);
-  if (!visitor.id || rateLimit(`react:${visitor.id}`, 5, 10_000)) {
-    return send(fail(429, 'rate_limited', 'Doucement sur les réactions.'));
+  if (!visitor.id || rateLimit(`act:${visitor.id}`, 8, 10_000)) {
+    return send(fail(429, 'rate_limited', 'Doucement, laisse ton avatar souffler.'));
   }
   markPresent(visitor.id);
-  if (!react(visitor.id, emoji)) return send(fail(400, 'bad_request', 'Réaction inconnue.'));
+  if (!act(visitor.id, kind, value, { to })) return send(fail(400, 'bad_request', 'Action inconnue.'));
   return send(json({ ok: true }));
 }
 
@@ -188,6 +212,7 @@ async function voteSkip(request, cfg, uri) {
 
     // No tally: the track has just been skipped, this vote arrived a moment late.
     const tally = voteToSkip(uri, visitor.id);
+    if (tally) act(visitor.id, 'did', 'skip');
     if (tally && tally.votes < tally.needed) {
       return send(json({ skipped: false, present: presentCount(), skip: tally }));
     }
@@ -243,9 +268,13 @@ async function changeVolume(request, cfg, direction) {
     }
     await setVolume(target);
     trustVolume(cfg, target);
-    return json({ volume: volumeInfo(target, VOLUME_WAIT, cfg) }, 200, {
+    const response = json({ volume: volumeInfo(target, VOLUME_WAIT, cfg) }, 200, {
       'set-cookie': volumeCookie(request, cfg),
     });
+    // Their avatar shows it, when they have one.
+    const visitor = identify(request, cfg);
+    act(visitor.id, 'did', direction === 'down' ? 'quieter' : 'louder');
+    return withCookie(response, visitor.cookie);
   } catch (err) {
     return spotifyFailure(err);
   }

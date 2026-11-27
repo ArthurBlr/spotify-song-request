@@ -99,10 +99,14 @@ Le lien à partager est `https://TON-SITE.vercel.app/?code=TON_CODE`.
 - Sous le titre en cours, une barre montre où en est la lecture. La page passe au titre suivant dès que celui-ci se termine.
 - La file d'attente a son propre volet : à côté de la recherche sur un écran large, dans un onglet sur téléphone.
 - Le bouton **Passer** sert à voter pour passer le titre en cours. Il est passé dès que plus de la moitié des personnes en ligne ont voté : 2 votes pour 3 personnes, 3 pour 4. Quand on est seul sur la page, un vote suffit.
+- Dans la file d'attente, chaque titre demandé depuis la page porte l'avatar et le pseudo de la personne qui l'a ajouté. Quand il passe, son pseudo s'affiche sous le titre, et son personnage grossit un peu et passe sous le projecteur, un disque au-dessus de la tête, le temps du morceau. La foule applaudit à la fin.
 - Les boutons **−** et **+** règlent le volume de Spotify par pas de 10 %. Depuis la page, il ne monte jamais au-dessus de 50 % et ne descend jamais sous 10 %. Toi, tu restes libre de le régler comme tu veux dans Spotify : si tu dépasses 50 %, la page permet seulement de le baisser.
 - Le nombre de personnes en ligne s'affiche en haut de la page. Il compte les navigateurs où la page est ouverte et visible.
 - Chaque personne en ligne a un petit personnage qui se promène en bas de l'écran, et qui danse quand la musique tourne. Le bouton **Mon avatar** sert à choisir son style (contours néon ou pixels), sa couleur, sa forme, un accessoire et un pseudo. Le pseudo est visible par tous ceux qui ont la page ouverte.
-- Les émojis sous le titre en cours sont des réactions : un appui, et ton personnage le dit dans une bulle, sur l'écran de tout le monde. Les autres le voient en quelques secondes, 15 au plus pour la première réaction.
+- Sous les réactions, une rangée de boutons fait danser ton personnage (tourner, sauter, saluer) ou lui fait dire quelques mots (« Encore ! », « Bof… », « Monte le son ! »).
+- Un clic sur le personnage de quelqu'un d'autre permet de lui envoyer un 👏 ou un ❤️, qui vole du tien jusqu'au sien.
+- Chaque personnage montre ce que son propriétaire vient de faire : une note quand il ajoute un titre, un 👎 quand il vote pour passer, un 🤫 ou un 🔊 quand il règle le volume. Quand plusieurs personnes envoient un 🔥 en même temps, toute la foule saute.
+- Les émojis sous le titre en cours sont des réactions : un appui, et l'émoji s'envole au-dessus de ton personnage, sur l'écran de tout le monde. Les autres le voient en quelques secondes, 15 au plus pour la première réaction ; c'est pareil pour tout ce que font les personnages.
 
 Trois règles évitent les abus :
 
@@ -132,6 +136,7 @@ Sur ton ordinateur, ils se trouvent dans le fichier `.env` ; relance `npm start`
 | `COOLDOWN_SECONDS` | Délai entre deux demandes d'un même navigateur. `0` : aucun délai | `3` |
 | `VOLUME_MAX` | Volume le plus fort que les visiteurs peuvent régler, en %. `0` : pas de réglage du volume depuis la page | `50` |
 | `VOLUME_MIN` | Volume le plus faible que les visiteurs peuvent régler, en % | `10` |
+| `VIP_CODE_HASHES` | Empreintes SHA-256 de codes qui débloquent des choix d'avatar réservés (voir plus bas) | vide |
 | `PORT` | Sur ton ordinateur seulement : port de la page. Si tu le changes, change aussi la Redirect URI de l'étape 1 | `3000` |
 | `HOST` | Sur ton ordinateur seulement : `127.0.0.1` rend la page invisible pour les autres appareils | `0.0.0.0` |
 
@@ -164,7 +169,8 @@ Sur ton ordinateur, ils se trouvent dans le fichier `.env` ; relance `npm start`
 - Le Client secret et le refresh token restent côté serveur. Le navigateur des visiteurs ne les voit jamais.
 - L'autorisation demandée à Spotify se limite à lire la lecture en cours et sa position, ajouter des titres à la file, passer au titre suivant et régler le volume.
 - Sur ton ordinateur, seul cet ordinateur peut relier ou changer le compte Spotify : `/api/login` est refusé aux autres appareils.
-- Les limites sont volontairement simples : chaque délai tient dans un cookie signé, et un plafond par adresse IP s'applique par 10 minutes : 30 demandes, 60 réglages du volume. Un autre cookie signé distingue les navigateurs, pour compter les personnes en ligne et donner un vote à chacune. Ces limites découragent les abus entre collègues, pas une attaque déterminée. Garde un `ACCESS_CODE`.
+- Les limites sont volontairement simples : chaque délai tient dans un cookie signé, et un plafond par adresse IP s'applique par 10 minutes : 30 demandes, 60 réglages du volume. Un autre cookie signé distingue les navigateurs, pour compter les personnes en ligne et donner un vote à chacune. Un troisième retient les dernières demandes de chaque navigateur : c'est lui qui permet de dire qui a ajouté le titre en cours. Ces limites découragent les abus entre collègues, pas une attaque déterminée. Garde un `ACCESS_CODE`.
+- Quelques choix d'avatar sont réservés à qui détient un code : deux couleurs animées, une forme et deux accessoires. Le serveur ne connaît que l'empreinte SHA-256 du code, jamais le code. Son détenteur ouvre une fois la page avec `&vip=LE_CODE` au bout du lien ; le serveur lui répond par un cookie signé, et refuse ces choix à tous les autres. Une empreinte est fournie dans `lib/config.js`, celle de l'auteur ; pour ajouter la tienne, calcule-la avec `node -e "console.log(require('crypto').createHash('sha256').update('MON_CODE').digest('hex'))"` et mets-la dans `VIP_CODE_HASHES`.
 - Chaque avatar est gardé dans le navigateur de son propriétaire, qui le renvoie à chaque rafraîchissement : le serveur ne fait que le transmettre aux autres, et rien n'est perdu quand tu relances le script.
-- Les réactions passent par le rafraîchissement de la page, toutes les 15 secondes. Dès qu'une réaction arrive ou part, la page se rafraîchit toutes les 3 secondes pendant 30 secondes, pour que les suivantes s'affichent vite.
-- Les votes, les réactions et le nombre de personnes en ligne sont gardés dans la mémoire du serveur : ils repartent de zéro quand tu relances le script. Sur Vercel, les visiteurs peuvent être répartis sur plusieurs instances qui ne partagent pas leur mémoire : le compteur peut alors être sous-estimé, et un titre passé avec moins de votes.
+- Ce que font les personnages passe par le rafraîchissement de la page, toutes les 15 secondes. Dès que l'un d'eux fait quelque chose, la page se rafraîchit toutes les 3 secondes pendant 30 secondes, pour que la suite s'affiche vite.
+- Les votes, ce que font les personnages et le nombre de personnes en ligne sont gardés dans la mémoire du serveur : ils repartent de zéro quand tu relances le script. Sur Vercel, les visiteurs peuvent être répartis sur plusieurs instances qui ne partagent pas leur mémoire : le compteur peut alors être sous-estimé, et un titre passé avec moins de votes.

@@ -2,6 +2,7 @@
 // so the tests need no account and no network: `npm test`.
 
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { beforeEach, test } from 'node:test';
 
 import { GET as callback } from '../api/callback.js';
@@ -111,6 +112,16 @@ function browser() {
 }
 
 const skip = (uri) => ({ method: 'POST', body: { skip: uri } });
+/** A poll that carries an avatar, the way the page sends it. */
+const wearing = (value) => ({
+  headers: { 'x-avatar': typeof value === 'string' ? value : encodeURIComponent(JSON.stringify(value)) },
+});
+/** The cookie `name` among those a response sets, as "name=value". */
+const cookieOf = (res, name) =>
+  res.headers
+    .getSetCookie()
+    .find((line) => line.startsWith(`${name}=`))
+    ?.split(';')[0];
 const turn = (direction) => ({ method: 'POST', body: { volume: direction } });
 
 /** Gives the fake Spotify a device whose volume can be read and set. */
@@ -134,6 +145,7 @@ beforeEach(() => {
   delete process.env.COOLDOWN_SECONDS;
   delete process.env.VOLUME_MAX;
   delete process.env.VOLUME_MIN;
+  delete process.env.VIP_CODE_HASHES;
   resetRoom();
   spotify = fakeSpotify();
 });
@@ -231,18 +243,20 @@ test('queue shows what is playing and what comes next, with one token for all ca
 test('queue copes with nothing playing', async () => {
   spotify.queue = () => reply(200, { currently_playing: null, queue: [] });
   spotify.player = () => reply(204);
-  const { people, reactions, ...body } = await (await queue(call('/api/queue'))).json();
+  const { people, can, ...body } = await (await queue(call('/api/queue'))).json();
   assert.deepEqual(body, {
     playing: null,
     progress: null,
+    requester: null,
     next: [],
     cooldown: 0,
     present: 1,
     skip: null,
     volume: null,
+    vip: false,
   });
   assert.equal(people.length, 1);
-  assert.ok(reactions.length > 0);
+  assert.deepEqual(Object.keys(can), ['react', 'move', 'say', 'give']);
 });
 
 test('a request adds the track, then the same browser has to wait', async () => {
@@ -254,7 +268,7 @@ test('a request adds the track, then the same browser has to wait', async () => 
   const added = spotify.calls.find((c) => c.method === 'POST' && c.url.pathname === '/v1/me/player/queue');
   assert.equal(added.url.searchParams.get('uri'), uri);
 
-  const cookie = res.headers.get('set-cookie');
+  const cookie = res.headers.getSetCookie().find((line) => line.startsWith('sr_last='));
   assert.match(cookie, /^sr_last=\d+\.[\w-]+; Path=\/; Max-Age=3; HttpOnly; SameSite=Lax; Secure$/);
   const pair = cookie.split(';')[0];
 
@@ -307,9 +321,6 @@ test('queue counts the browsers that have the page open', async () => {
 });
 
 test('everyone present is listed with the avatar their browser sent', async () => {
-  const wearing = (value) => ({
-    headers: { 'x-avatar': typeof value === 'string' ? value : encodeURIComponent(JSON.stringify(value)) },
-  });
   const alice = browser();
   const bob = browser();
   const look = { name: 'Alice', style: 1, color: 2, body: 3, extra: 1 };
@@ -317,7 +328,7 @@ test('everyone present is listed with the avatar their browser sent', async () =
   const first = await alice(queue, '/api/queue', wearing(look));
   const id = first.headers.get('set-cookie').match(/^sr_id=([\w-]+)\./)[1];
   const [me] = (await first.json()).people;
-  assert.deepEqual(me, { key: me.key, you: true, avatar: look, reaction: null });
+  assert.deepEqual(me, { key: me.key, you: true, avatar: look, acts: [] });
   // The key tells people apart without giving away the id their cookie holds.
   assert.match(me.key, /^[\w-]{10}$/);
   assert.ok(!id.includes(me.key));
@@ -325,8 +336,8 @@ test('everyone present is listed with the avatar their browser sent', async () =
   // Someone who has not chosen has no avatar: the page gives them a default one.
   const seen = (await (await bob(queue, '/api/queue')).json()).people;
   assert.deepEqual(seen, [
-    { key: me.key, you: false, avatar: look, reaction: null },
-    { key: seen[1].key, you: true, avatar: null, reaction: null },
+    { key: me.key, you: false, avatar: look, acts: [] },
+    { key: seen[1].key, you: true, avatar: null, acts: [] },
   ]);
 
   // Something that is not an avatar leaves the last one in place.
@@ -347,44 +358,211 @@ test('everyone present is listed with the avatar their browser sent', async () =
   });
 });
 
-test('an avatar says a reaction, for the others to see', async () => {
-  const saying = (react) => ({ method: 'POST', body: { react } });
+test('the reserved avatar choices are for whoever holds a code', async () => {
+  const code = 'un code que seul son propriétaire connaît';
+  process.env.VIP_CODE_HASHES = ` ${createHash('sha256').update(code).digest('hex').toUpperCase()} , not-a-hash`;
+  const showing = (value, look) => ({
+    headers: { 'x-vip': encodeURIComponent(value), ...wearing(look).headers },
+  });
+  const special = { name: 'Vip', style: 0, color: 101, body: 100, extra: 101 };
+  const plain = { name: 'Vip', style: 0, color: 0, body: 0, extra: 0 };
+  const alice = browser();
+  const bob = browser();
+
+  // Without the code, the reserved choices fall back to the first ones.
+  const before = await (await alice(queue, '/api/queue', wearing(special))).json();
+  assert.equal(before.vip, false);
+  assert.deepEqual(before.people[0].avatar, plain);
+
+  // A wrong code changes nothing.
+  const wrong = await alice(queue, '/api/queue', showing('pas le bon', special));
+  assert.equal((await wrong.json()).vip, false);
+  assert.equal(cookieOf(wrong, 'sr_vip'), undefined);
+
+  // The right one is shown once: a cookie signed for this browser then stands for it.
+  const shown = await alice(queue, '/api/queue', showing(code, special));
+  assert.match(
+    shown.headers.getSetCookie().find((line) => line.startsWith('sr_vip=')),
+    /^sr_vip=[0-9a-f]{16}\.[\w-]+; Path=\/; Max-Age=15552000; HttpOnly; SameSite=Lax; Secure$/,
+  );
+  const granted = await shown.json();
+  assert.equal(granted.vip, true);
+  assert.deepEqual(granted.people[0].avatar, special);
+  const later = await alice(queue, '/api/queue', wearing(special));
+  assert.equal(cookieOf(later, 'sr_vip'), undefined);
+  assert.equal((await later.json()).vip, true);
+
+  // The others see it on that avatar, and cannot wear it themselves, even with the cookie copied.
+  const seen = await (await bob(queue, '/api/queue', wearing(special))).json();
+  assert.deepEqual(
+    seen.people.map((person) => person.avatar),
+    [special, plain],
+  );
+  const mallory = await queue(call('/api/queue'));
+  const cookie = `${cookieOf(mallory, 'sr_id')}; ${cookieOf(shown, 'sr_vip')}`;
+  const copied = await queue(call('/api/queue', { headers: { cookie, ...wearing(special).headers } }));
+  assert.equal((await copied.json()).vip, false);
+
+  // Taking the code off the list takes the cookie's worth with it.
+  delete process.env.VIP_CODE_HASHES;
+  const revoked = await (await alice(queue, '/api/queue', wearing(special))).json();
+  assert.equal(revoked.vip, false);
+  assert.deepEqual(revoked.people.find((person) => person.you).avatar, plain);
+});
+
+test('an avatar reacts, dances, speaks and gives, for the others to see', async () => {
+  const doing = (body) => ({ method: 'POST', body });
   const alice = browser();
   const bob = browser();
 
   // No need for Spotify, nor to have polled first.
-  const said = await alice(vote, '/api/queue', saying('🔥'));
+  const said = await alice(vote, '/api/queue', doing({ react: '🔥' }));
   assert.equal(said.status, 200);
   assert.match(said.headers.get('set-cookie'), /^sr_id=/);
   assert.equal(spotify.calls.length, 0);
 
   const state = await (await bob(queue, '/api/queue')).json();
-  // The page builds its buttons from this list.
-  assert.ok(state.reactions.includes('🔥') && state.reactions.length >= 6);
+  // The page builds its buttons from these lists.
+  assert.ok(state.can.react.includes('🔥') && state.can.say.length > 0 && state.can.give.length > 0);
+  assert.deepEqual(state.can.move, ['spin', 'jump', 'wave']);
   const [her, him] = state.people;
-  assert.equal(her.reaction.emoji, '🔥');
-  assert.ok(Number.isInteger(her.reaction.at));
-  assert.equal(him.reaction, null);
+  assert.deepEqual(
+    her.acts.map(({ kind, value }) => ({ kind, value })),
+    [{ kind: 'emoji', value: '🔥' }],
+  );
+  assert.ok(Number.isInteger(her.acts[0].at));
+  assert.deepEqual(him.acts, []);
 
-  // A later one replaces it, and can be told apart even when it is the same emoji.
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  await alice(vote, '/api/queue', saying('🔥'));
-  const again = (await (await bob(queue, '/api/queue')).json()).people[0].reaction;
-  assert.ok(again.at > her.reaction.at);
-
-  // Only the emojis of the list, and only with the access code.
-  for (const react of ['💩', '<b>', 7, null]) {
-    const refused = await bob(vote, '/api/queue', saying(react));
-    assert.equal(refused.status, 400, String(react));
+  // Everything else an avatar can do, in the order it was done.
+  for (const body of [{ react: '🔥' }, { move: 'spin' }, { say: state.can.say[0] }, { gift: '👏', to: him.key }]) {
+    assert.equal((await alice(vote, '/api/queue', doing(body))).status, 200, JSON.stringify(body));
   }
-  assert.equal((await vote(call('/api/queue', { ...saying('🔥'), code: null }))).status, 401);
+  const done = (await (await bob(queue, '/api/queue')).json()).people[0].acts;
+  assert.deepEqual(
+    done.map(({ kind, value, to }) => ({ kind, value, to })),
+    [
+      { kind: 'emoji', value: '🔥', to: undefined },
+      { kind: 'emoji', value: '🔥', to: undefined },
+      { kind: 'move', value: 'spin', to: undefined },
+      { kind: 'say', value: state.can.say[0], to: undefined },
+      { kind: 'gift', value: '👏', to: him.key },
+    ],
+  );
+  // Each can be told from the one before, even the same emoji twice.
+  assert.ok(done.every((one, i) => i === 0 || one.at > done[i - 1].at));
 
-  // Five in ten seconds for one browser, then it has to slow down.
+  // Only what the lists hold, a gift only for someone else who is here, and only with the access code.
+  const dave = browser();
+  for (const body of [{ react: '💩' }, { react: 7 }, { react: null }, { move: 'moonwalk' }, { say: '<b>Bonjour</b>' }]) {
+    assert.equal((await dave(vote, '/api/queue', doing(body))).status, 400, JSON.stringify(body));
+  }
+  const gifts = [
+    { gift: '🔥', to: her.key },
+    { gift: '👏', to: him.key },
+    { gift: '👏', to: 'nobody' },
+    { gift: '👏' },
+  ];
+  for (const body of gifts) {
+    assert.equal((await bob(vote, '/api/queue', doing(body))).status, 400, JSON.stringify(body));
+  }
+  assert.equal((await vote(call('/api/queue', { ...doing({ react: '🔥' }), code: null }))).status, 401);
+
+  // Eight in ten seconds for one browser, then it has to slow down.
   const carol = browser();
-  for (let i = 0; i < 5; i += 1) assert.equal((await carol(vote, '/api/queue', saying('👏'))).status, 200);
-  const tooMany = await carol(vote, '/api/queue', saying('👏'));
+  for (let i = 0; i < 8; i += 1) assert.equal((await carol(vote, '/api/queue', doing({ react: '👏' }))).status, 200);
+  const tooMany = await carol(vote, '/api/queue', doing({ move: 'jump' }));
   assert.equal(tooMany.status, 429);
   assert.equal((await tooMany.json()).error, 'rate_limited');
+});
+
+test('an avatar shows what its owner just did: a vote, a track added, the volume', async () => {
+  speaker(40);
+  const alice = browser();
+  const bob = browser();
+  await alice(queue, '/api/queue');
+  await bob(queue, '/api/queue');
+  const deeds = async () =>
+    (await (await bob(queue, '/api/queue')).json()).people[0].acts.map(({ kind, value }) => `${kind}:${value}`);
+
+  await alice(vote, '/api/queue', skip(track(1).uri));
+  assert.deepEqual(await deeds(), ['did:skip']);
+
+  await alice(vote, '/api/queue', turn('down'));
+  assert.deepEqual(await deeds(), ['did:skip', 'did:quieter']);
+
+  await alice(request, '/api/request', { method: 'POST', body: { uri: track(7).uri } });
+  assert.deepEqual(await deeds(), ['did:skip', 'did:quieter', 'did:add']);
+  // The browser keeps showing its list of requests with every poll: the track is added once.
+  await alice(queue, '/api/queue');
+  assert.deepEqual(await deeds(), ['did:skip', 'did:quieter', 'did:add']);
+
+  // A visitor cannot make these up.
+  assert.equal((await alice(vote, '/api/queue', { method: 'POST', body: { did: 'add' } })).status, 400);
+});
+
+test('the page says who asked for the track that is playing, for that one play', async () => {
+  process.env.COOLDOWN_SECONDS = '0';
+  let turn = 0;
+  // A new token starts with an empty cache: the next poll sees the player as it is now.
+  const nowPlaying = (n) => {
+    process.env.SPOTIFY_REFRESH_TOKEN = `refresh-${run}-${(turn += 1)}`;
+    spotify.queue = () => reply(200, { currently_playing: track(n, `Titre ${n}`), queue: [] });
+  };
+  const alice = browser();
+  const bob = browser();
+  const look = wearing({ name: 'Alice', style: 0, color: 1, body: 2, extra: 3 });
+  const me = (await (await alice(queue, '/api/queue', look)).json()).people[0];
+
+  const added = await alice(request, '/api/request', { method: 'POST', body: { uri: track(7).uri } });
+  assert.equal(added.status, 200);
+  assert.match(
+    added.headers.getSetCookie().find((line) => line.startsWith('sr_req=')),
+    /^sr_req=[A-Za-z0-9]{22}-[a-z0-9]+\.[\w-]+; Path=\/; Max-Age=43200; HttpOnly; SameSite=Lax; Secure$/,
+  );
+
+  // Queued, not playing yet: the queue says whose it is, track by track.
+  const avatar = { name: 'Alice', style: 0, color: 1, body: 2, extra: 3 };
+  process.env.SPOTIFY_REFRESH_TOKEN = `refresh-${run}-queued`;
+  spotify.queue = () =>
+    reply(200, { currently_playing: track(1, 'En cours'), queue: [track(2, 'Suivant'), track(7, 'Demandé')] });
+  const queued = await (await bob(queue, '/api/queue')).json();
+  assert.equal(queued.requester, null);
+  assert.deepEqual(
+    queued.next.map((item) => item.requester),
+    [null, { key: me.key, name: 'Alice', you: false, avatar }],
+  );
+  assert.equal((await (await alice(queue, '/api/queue', look)).json()).next[1].requester.you, true);
+
+  nowPlaying(7);
+  assert.deepEqual((await (await alice(queue, '/api/queue', look)).json()).requester, {
+    key: me.key,
+    name: 'Alice',
+    you: true,
+    avatar,
+  });
+  assert.deepEqual((await (await bob(queue, '/api/queue')).json()).requester, {
+    key: me.key,
+    name: 'Alice',
+    you: false,
+    avatar,
+  });
+
+  // The track has gone by; if it comes back on its own, it is nobody's.
+  nowPlaying(1);
+  assert.equal((await (await alice(queue, '/api/queue', look)).json()).requester, null);
+  nowPlaying(7);
+  assert.equal((await (await alice(queue, '/api/queue', look)).json()).requester, null);
+
+  // The list is signed for one browser: copied into another, it claims nothing.
+  const second = await alice(request, '/api/request', { method: 'POST', body: { uri: track(8).uri } });
+  const stolen = cookieOf(second, 'sr_req');
+  assert.match(stolen, /^sr_req=[A-Za-z0-9]{22}-[a-z0-9]+_[A-Za-z0-9]{22}-[a-z0-9]+\./);
+  const mallory = await queue(call('/api/queue'));
+  await queue(call('/api/queue', { headers: { cookie: `${cookieOf(mallory, 'sr_id')}; ${stolen}` } }));
+  await queue(call('/api/queue', { headers: { cookie: `${cookieOf(mallory, 'sr_id')}; sr_req=${track(8).uri.slice(14)}-zzzzzzzz.forged` } }));
+  nowPlaying(8);
+  const requester = (await (await alice(queue, '/api/queue', look)).json()).requester;
+  assert.deepEqual(requester, { key: me.key, name: 'Alice', you: true, avatar });
 });
 
 test('a new visitor gets their id even when Spotify fails', async () => {
@@ -541,7 +719,7 @@ test('a visitor turns the volume down one step, then has to wait', async () => {
   assert.deepEqual(await res.json(), { volume: { percent: 30, min: 10, max: 50, wait: 10 } });
   assert.equal(box.percent, 30);
   assert.match(
-    res.headers.get('set-cookie'),
+    res.headers.getSetCookie().find((line) => line.startsWith('sr_vol=')),
     /^sr_vol=\d+\.[\w-]+; Path=\/; Max-Age=10; HttpOnly; SameSite=Lax; Secure$/,
   );
 
@@ -573,7 +751,7 @@ test('the page shows the volume that was just set, even while Spotify still repo
 test('a wait cookie only counts for the action it was signed for', async () => {
   speaker(40);
   const requested = await request(call('/api/request', { method: 'POST', body: { uri: track(7).uri } }));
-  const signed = requested.headers.get('set-cookie').split(';')[0].replace('sr_last=', '');
+  const signed = cookieOf(requested, 'sr_last').replace('sr_last=', '');
   for (const cookie of [`sr_vol=${signed}`, `sr_vol=${Date.now()}.forged`]) {
     const res = await vote(call('/api/queue', { ...turn('down'), headers: { cookie } }));
     assert.equal(res.status, 200, cookie);
@@ -670,7 +848,7 @@ test('COOLDOWN_SECONDS=0 removes the wait', async () => {
   process.env.COOLDOWN_SECONDS = '0';
   const res = await request(call('/api/request', { method: 'POST', body: { uri: track(7).uri } }));
   assert.equal(res.status, 200);
-  assert.equal(res.headers.get('set-cookie'), null);
+  assert.equal(cookieOf(res, 'sr_last'), undefined);
 });
 
 test('a track already playing or queued is not added twice', async () => {

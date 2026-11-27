@@ -1,8 +1,16 @@
 // POST /api/request { uri: "spotify:track:..." } -> adds the track to the queue.
 
 import { getConfig } from '../lib/config.js';
-import { checkAccess, cooldownCookie, cooldownRemaining, rateLimit } from '../lib/guard.js';
+import {
+  checkAccess,
+  cooldownCookie,
+  cooldownRemaining,
+  identify,
+  rateLimit,
+  requestsCookie,
+} from '../lib/guard.js';
 import { clientIp, fail, json } from '../lib/http.js';
+import { noteRequests } from '../lib/room.js';
 import { addToQueue, getQueue, spotifyFailure, TRACK_URI } from '../lib/spotify.js';
 
 export async function POST(request) {
@@ -42,8 +50,17 @@ export async function POST(request) {
     }
 
     await addToQueue(uri);
-    const headers = cfg.cooldownSeconds ? { 'set-cookie': cooldownCookie(request, cfg) } : {};
-    return json({ ok: true, cooldown: cfg.cooldownSeconds }, 200, headers);
+    const response = json({ ok: true, cooldown: cfg.cooldownSeconds });
+    if (cfg.cooldownSeconds) response.headers.append('set-cookie', cooldownCookie(request, cfg));
+    // Remembered in the browser, for the page to say who asked for which track:
+    // the browser shows it to /api/queue with its next poll. When both routes
+    // run in one process, as with `npm start`, it is known at once.
+    const visitor = identify(request, cfg);
+    const now = Date.now();
+    if (visitor.cookie) response.headers.append('set-cookie', visitor.cookie);
+    if (visitor.id) response.headers.append('set-cookie', requestsCookie(request, cfg, visitor.id, uri, now));
+    noteRequests(visitor.id, [{ uri, at: now }], now);
+    return response;
   } catch (err) {
     return spotifyFailure(err);
   }

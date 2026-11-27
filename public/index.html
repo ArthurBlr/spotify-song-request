@@ -61,8 +61,10 @@
         </div>
         <span id="progress-end" class="time"></span>
       </div>
-      <!-- One button per reaction: a tap, and one's avatar says it in a bubble. -->
+      <!-- One button per reaction: a tap, and the emoji floats up from one's avatar. -->
       <div id="reactions" class="reactions" role="group" aria-label="Réagir" hidden></div>
+      <!-- Dance moves and a few words for one's avatar. On a phone the row scrolls sideways. -->
+      <div id="sayings" class="sayings" role="group" aria-label="Faire danser ou parler mon avatar" hidden></div>
     </section>
 
     <!-- Narrow screens show one pane at a time; wide screens show both and hide these. -->
@@ -97,6 +99,12 @@
 <!-- One small character per person on the page, strolling along the bottom of the screen
      and saying their reactions. -->
 <div id="crowd" class="crowd" aria-hidden="true"></div>
+
+<!-- Opens by the pointer after a click on someone's character: what to send them. -->
+<div id="gift-picker" class="gift-picker" role="group" aria-labelledby="gift-for" hidden>
+  <span id="gift-for"></span>
+  <div id="gift-choices" class="gift-choices"></div>
+</div>
 
 <dialog id="avatar-dialog" class="card dialog" aria-labelledby="avatar-title">
   <form id="avatar-form">

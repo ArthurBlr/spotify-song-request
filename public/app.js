@@ -1,4 +1,4 @@
-import { avatarHeader, reactAsMe, renderCrowd, setUpAvatars } from './avatars.js';
+import { actAsMe, applaud, avatarHeader, portrait, renderCrowd, setUpAvatars } from './avatars.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -27,8 +27,15 @@ const storage = {
 };
 
 let accessCode = storage.get('sr_code');
+// The code for the reserved avatar choices, when this browser was given one. It
+// is shown to the server until the server has answered with a cookie that
+// stands for it.
+let vipCode = storage.get('sr_vip');
+let vipKnown = false;
 let currentView = null;
 let playingUri = null;
+// Whether someone here asked for the track that is playing: the crowd claps when it ends.
+let playingRequested = false;
 // Where the track was when the server last said: { ms, paused, at, total, uri }.
 let progress = null;
 let endTimer = 0;
@@ -47,13 +54,22 @@ let searchAbort = null;
 let toastTimer = 0;
 
 // A shared link can carry the code: https://…/?code=XXXX
+// A private one can also carry the code that unlocks the reserved avatar choices: &vip=YYYY
 {
   const params = new URLSearchParams(location.search);
   const fromLink = params.get('code');
+  const vipFromLink = params.get('vip');
   if (fromLink) {
     accessCode = fromLink;
     storage.set('sr_code', fromLink);
+  }
+  if (vipFromLink) {
+    vipCode = vipFromLink;
+    storage.set('sr_vip', vipFromLink);
+  }
+  if (fromLink || vipFromLink) {
     params.delete('code');
+    params.delete('vip');
     const rest = params.toString();
     history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : ''));
   }
@@ -165,6 +181,7 @@ function trackRow(track, { button = false, tag = 'li' } = {}) {
   meta.append(artist);
 
   row.append(cover, meta);
+  if (track.requester) row.append(asker(track.requester));
   if (button) {
     const add = el('button', 'add', 'Ajouter');
     add.type = 'button';
@@ -176,7 +193,26 @@ function trackRow(track, { button = false, tag = 'li' } = {}) {
   return row;
 }
 
-function renderNow(track, errorMessage) {
+/** The name to show for whoever asked for a track: { name, you }. */
+function askerName(requester) {
+  return requester.you ? 'toi' : requester.name;
+}
+
+/** In the queue, who asked for a track: their avatar, and their name when there is room. */
+function asker(requester) {
+  const name = askerName(requester);
+  const picture = portrait(requester);
+  const chip = el('span', 'asker');
+  chip.style.color = picture.style.color;
+  chip.title = name ? `Ajouté par ${name}` : 'Ajouté depuis cette page';
+  chip.setAttribute('aria-label', chip.title);
+  chip.append(picture);
+  if (name) chip.append(el('span', 'asker-name', name));
+  return chip;
+}
+
+/** `requester` is who asked for the track, { key, name, you, avatar }, or null when nobody here did. */
+function renderNow(track, errorMessage, requester) {
   const box = $('now');
   if (errorMessage) {
     box.replaceChildren(el('p', 'error', errorMessage));
@@ -185,7 +221,13 @@ function renderNow(track, errorMessage) {
       el('p', '', 'Rien pour l’instant. Les demandes passeront dès que la musique tourne.'),
     );
   } else {
-    box.replaceChildren(trackRow(track, { tag: 'div' }));
+    const row = trackRow(track, { tag: 'div' });
+    if (requester) {
+      const by = el('span', 'by', 'Ajouté par ');
+      by.append(portrait(requester), askerName(requester));
+      row.querySelector('.meta').append(by);
+    }
+    box.replaceChildren(row);
   }
 }
 
@@ -288,21 +330,34 @@ function updateVolumeButtons() {
   $('volume-up').title = atMax ? `Pas au-dessus de ${volume.max} % depuis cette page.` : '';
 }
 
-/** One button per reaction the server knows: a tap makes this browser's avatar say it. */
-function renderReactions(emojis) {
-  const bar = $('reactions');
-  bar.hidden = emojis.length === 0;
-  const shown = emojis.join(' ');
-  if (bar.dataset.shown === shown) return;
-  bar.dataset.shown = shown;
-  bar.replaceChildren(
-    ...emojis.map((emoji) => {
-      const button = el('button', 'react', emoji);
-      button.type = 'button';
-      button.setAttribute('aria-label', `Réagir avec ${emoji}`);
-      button.addEventListener('click', () => sendReaction(emoji));
-      return button;
-    }),
+// The dance moves this page has a button for, among those the server knows.
+const MOVE_LABELS = { spin: '↻ Tourner', jump: '⤒ Sauter', wave: '👋 Saluer' };
+
+/**
+ * What this browser's avatar can be made to do, as the server lists it:
+ * { react, move, say }. One row of emojis, and one of dance moves and sayings.
+ */
+function renderExpressions({ react = [], move = [], say = [] } = {}) {
+  const emojis = $('reactions');
+  const words = $('sayings');
+  const moves = move.filter((name) => MOVE_LABELS[name]);
+  emojis.hidden = react.length === 0;
+  words.hidden = moves.length + say.length === 0;
+  const shown = JSON.stringify([react, moves, say]);
+  if (emojis.dataset.shown === shown) return;
+  emojis.dataset.shown = shown;
+
+  const button = (className, text, label, kind, value) => {
+    const node = el('button', className, text);
+    node.type = 'button';
+    node.setAttribute('aria-label', label);
+    node.addEventListener('click', () => express(kind, value));
+    return node;
+  };
+  emojis.replaceChildren(...react.map((emoji) => button('react', emoji, `Réagir avec ${emoji}`, 'emoji', emoji)));
+  words.replaceChildren(
+    ...moves.map((name) => button('word move', MOVE_LABELS[name], `Mon avatar : ${MOVE_LABELS[name]}`, 'move', name)),
+    ...say.map((text) => button('word', text, `Mon avatar dit : ${text}`, 'say', text)),
   );
 }
 
@@ -367,16 +422,31 @@ function updateCooldown() {
 async function refreshQueue() {
   const changes = volumeChanges;
   try {
-    const data = await api('/api/queue', { headers: avatarHeader() });
+    const proving = Boolean(vipCode) && !vipKnown;
+    const data = await api('/api/queue', {
+      headers: { ...avatarHeader(), ...(proving && { 'x-vip': encodeURIComponent(vipCode) }) },
+    });
+    vipKnown = data.vip;
+    if (proving && !data.vip) {
+      // Not a code the server knows: no point in showing it again.
+      vipCode = '';
+      storage.set('sr_vip', '');
+    }
     show('main');
-    playingUri = data.playing?.uri ?? null;
-    renderNow(data.playing);
+    // A track someone asked for has played to its end: the crowd claps. Not when it was skipped.
+    const uri = data.playing?.uri ?? null;
+    if (playingRequested && uri !== playingUri && nearItsEnd()) applaud();
+    playingUri = uri;
+    playingRequested = Boolean(data.requester);
+    // They dance while the music plays and stop when it is paused. Whoever asked for the track is in the spotlight.
+    const dancing = Boolean(data.playing) && !data.progress?.paused;
+    const crowd = { dancing, star: data.requester?.key, gifts: data.can.give, holdsCode: data.vip };
+    if (renderCrowd(data.people, crowd)) stayLively();
+    renderNow(data.playing, '', data.requester);
     renderProgress(data.progress, data.playing);
     renderNext(data.next);
     renderPresent(data.present);
-    // They dance while the music plays, and stop when it is paused.
-    if (renderCrowd(data.people, { dancing: Boolean(data.playing) && !data.progress?.paused })) stayLively();
-    renderReactions(data.reactions);
+    renderExpressions(data.can);
     renderSkip(data.skip);
     // An answer that was on its way while the volume was being changed is out of date.
     if (changes === volumeChanges) renderVolume(data.volume);
@@ -390,26 +460,38 @@ async function refreshQueue() {
     }
     show('main');
     playingUri = null;
+    playingRequested = false;
     renderNow(null, err.message);
     renderProgress(null, null);
     renderNext([]);
     renderPresent(0);
     renderCrowd([]);
-    renderReactions([]);
+    renderExpressions();
     renderSkip(null);
     renderVolume(null);
   }
 }
 
-async function sendReaction(emoji) {
+/** True when the track that was playing had no more than a few seconds left. */
+function nearItsEnd() {
+  if (!progress || progress.paused) return false;
+  return progress.ms + (Date.now() - progress.at) > progress.total - 8000;
+}
+
+/**
+ * Makes this browser's avatar do something: an emoji, a dance move, a few
+ * words, or a gift `to` the key of someone else.
+ */
+async function express(kind, value, to) {
   // Shown at once on this screen; the others get it with their next poll.
-  reactAsMe(emoji);
+  actAsMe(kind, value, to);
   stayLively();
+  const field = { emoji: 'react', move: 'move', say: 'say', gift: 'gift' }[kind];
   try {
     await api('/api/queue', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ react: emoji }),
+      body: JSON.stringify({ [field]: value, to }),
     });
   } catch (err) {
     if (handleGate(err)) return;
@@ -428,6 +510,7 @@ async function voteSkip() {
     });
     renderPresent(data.present);
     renderSkip(data.skip);
+    actAsMe('did', 'skip');
     if (data.skipped) {
       toast('Titre passé.');
       // Spotify takes a moment to move on to the next track.
@@ -454,6 +537,7 @@ async function changeVolume(direction) {
       body: JSON.stringify({ volume: direction }),
     });
     renderVolume(data.volume);
+    actAsMe('did', direction === 'down' ? 'quieter' : 'louder');
     const next = data.volume.wait > 0 ? ` Prochain réglage dans ${data.volume.wait} s.` : '';
     toast(`Volume à ${data.volume.percent} %.${next}`);
   } catch (err) {
@@ -512,6 +596,7 @@ async function requestTrack(track, button) {
     button.setAttribute('aria-label', `${track.name} ajouté à la file d’attente`);
     toast(`« ${track.name} » est dans la file d’attente.`);
     startCooldown(data.cooldown);
+    actAsMe('did', 'add');
     // Spotify takes a moment to reflect the new queue.
     setTimeout(refreshQueue, 5000);
   } catch (err) {
@@ -537,8 +622,12 @@ $('search-form').addEventListener('submit', (event) => {
   runSearch();
 });
 
-// A new look is sent with the next poll: do not wait for it.
-setUpAvatars(refreshQueue);
+setUpAvatars({
+  // A new look is sent with the next poll: do not wait for it.
+  changed: refreshQueue,
+  give: (key, emoji) => express('gift', emoji, key),
+  gifted: (name, emoji) => toast(`${name || 'Quelqu’un'} t’envoie ${emoji}`),
+});
 
 $('skip').addEventListener('click', voteSkip);
 $('volume-down').addEventListener('click', () => changeVolume('down'));
