@@ -1,4 +1,4 @@
-import { actAsMe, applaud, avatarHeader, portrait, renderCrowd, setUpAvatars } from './avatars.js';
+import { actAsMe, applaud, avatarHeader, portrait, renderCrowd, setUpAvatars, syncClock } from './avatars.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -441,6 +441,7 @@ async function refreshQueue() {
     // They dance while the music plays and stop when it is paused. Whoever asked for the track is in the spotlight.
     const dancing = Boolean(data.playing) && !data.progress?.paused;
     const crowd = { dancing, star: data.requester?.key, gifts: data.can.give, holdsCode: data.vip };
+    syncClock(data.now);
     if (renderCrowd(data.people, crowd)) stayLively();
     renderNow(data.playing, '', data.requester);
     renderProgress(data.progress, data.playing);

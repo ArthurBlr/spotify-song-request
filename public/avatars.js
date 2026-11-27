@@ -7,6 +7,9 @@
 // A look is { name, style, color, body, extra }: a typed name and four numbers
 // that point into the lists below. Each body and each accessory is drawn
 // twice, once per style: as glowing outlines, and as pixels.
+// Where they walk is the same on every screen: see paths.js.
+
+import { legAt, spotAt } from './paths.js';
 
 /** Turns a drawing made of lines of characters into its rows. */
 const grid = (text) => text.trim().split(/\s+/);
@@ -439,10 +442,10 @@ function myLook() {
 const crowd = document.getElementById('crowd');
 const button = document.getElementById('avatar-button');
 const walkers = new Map(); // person key -> { key, node, tag, figure, look, shown, heard, x, y, timer }
+// The server's clock minus this one, in ms: the crowd walks to the server's time, the same on every screen.
+let clockOffset = 0;
 const lessMotion = matchMedia('(prefers-reduced-motion: reduce)');
 
-const SPEED = 45; // pixels per second
-const REACH = 420; // longest stroll, in pixels
 const DEPTH = 18; // how far up the screen they may wander, in pixels
 const ROOM = 44; // width kept for one character
 const EDGE = 34; // how far they stay from the sides, so that their name is not cut off
@@ -542,11 +545,10 @@ function arrive(key) {
   figure.className = 'figure';
   node.append(tag, figure);
 
-  const walker = { key, node, tag, figure, look: null, shown: '', heard: 0, x: Math.random(), y: Math.random(), timer: 0 };
-  place(walker, 0);
+  const walker = { key, node, tag, figure, look: null, shown: '', heard: 0, x: 0, y: 0, timer: 0 };
   crowd.append(node);
   walkers.set(key, walker);
-  if (!lessMotion.matches) walker.timer = setTimeout(() => stroll(walker), 400 + Math.random() * 3000);
+  follow(walker);
   return walker;
 }
 
@@ -728,27 +730,48 @@ function place(walker, seconds) {
   walker.node.style.zIndex = String(DEPTH - up);
 }
 
-/** Walks to a spot nearby, waits there a while, and sets off again. */
-function stroll(walker) {
-  const span = Math.max(1, crowd.clientWidth - ROOM - 2 * EDGE);
-  const from = walker.x;
-  const step = (Math.random() * 2 - 1) * Math.min(1, REACH / span);
-  walker.x = Math.min(1, Math.max(0, from + step));
-  walker.y = Math.random();
-  const seconds = Math.max(0.5, (Math.abs(walker.x - from) * span) / SPEED);
-
-  walker.node.classList.add('walking');
-  walker.node.classList.toggle('left', walker.x < from);
-  place(walker, seconds);
-  walker.timer = setTimeout(() => {
+/**
+ * Puts a character where it is on every screen at this moment, walks it on
+ * from there, and keeps doing so. With reduced motion, it only stands there.
+ */
+function follow(walker) {
+  clearTimeout(walker.timer);
+  const now = Date.now() + clockOffset;
+  if (lessMotion.matches) {
+    Object.assign(walker, spotAt(walker.key, now));
+    place(walker, 0);
+    return;
+  }
+  const { from, to, start, end, next } = legAt(walker.key, now);
+  const again = (at) => {
+    walker.timer = setTimeout(() => follow(walker), Math.max(50, at - now));
+  };
+  if (now < start || now >= end) {
     walker.node.classList.remove('walking');
-    walker.timer = setTimeout(() => stroll(walker), 1500 + Math.random() * 6000);
-  }, seconds * 1000);
+    Object.assign(walker, now < start ? from : to);
+    place(walker, 0);
+    again(now < start ? start : next);
+    return;
+  }
+  // On its way: from where it is now, without a jump, to the end of this leg.
+  Object.assign(walker, spotAt(walker.key, now));
+  place(walker, 0);
+  void walker.node.offsetWidth;
+  walker.node.classList.add('walking');
+  walker.node.classList.toggle('left', to.x < from.x);
+  Object.assign(walker, to);
+  place(walker, (end - now) / 1000);
+  again(end);
+}
+
+/** Sets the clock the crowd walks to from the time the server gave, in ms. */
+export function syncClock(serverNow) {
+  if (Number.isFinite(serverNow)) clockOffset = serverNow - Date.now();
 }
 
 // A narrower window must not leave anyone outside.
 addEventListener('resize', () => {
-  for (const walker of walkers.values()) place(walker, 0);
+  for (const walker of walkers.values()) follow(walker);
 });
 
 // --- A gift for someone: a click on their character, then on what to send -------------

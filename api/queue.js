@@ -1,5 +1,5 @@
 // GET  /api/queue                    -> { playing, progress, requester, next, cooldown, present, people,
-//                                         can, skip, volume, vip }
+//                                         can, skip, volume, vip, now }
 //                                       `requester` is who asked for the track that is playing;
 //                                       each track of `next` carries its own. `can` lists what
 //                                       an avatar may be made to do.
@@ -153,6 +153,8 @@ export async function GET(request) {
         skip: skipTally(playing?.uri, visitor.id),
         volume: volumeInfo(volume, volumeWait(request, cfg), cfg),
         vip,
+        // The clock the avatars walk to, for them to be at the same spot on every screen.
+        now: Date.now(),
       }),
       visitor.cookie,
       vipCookie,

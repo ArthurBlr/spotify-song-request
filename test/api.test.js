@@ -243,7 +243,8 @@ test('queue shows what is playing and what comes next, with one token for all ca
 test('queue copes with nothing playing', async () => {
   spotify.queue = () => reply(200, { currently_playing: null, queue: [] });
   spotify.player = () => reply(204);
-  const { people, can, ...body } = await (await queue(call('/api/queue'))).json();
+  const { people, can, now, ...body } = await (await queue(call('/api/queue'))).json();
+  assert.ok(Math.abs(now - Date.now()) < 5000);
   assert.deepEqual(body, {
     playing: null,
     progress: null,
